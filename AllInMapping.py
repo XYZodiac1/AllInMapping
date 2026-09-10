@@ -2283,36 +2283,15 @@ class UIBuilder(Runnable):
         self.extender.hideTestedBtn.addActionListener(toggle_hide_tested)
         topBar.add(self.extender.hideTestedBtn)
 
-        self.extender.toolsBtn = JButton(u"Tools")
-        style_btn(self.extender.toolsBtn)
-        def toggle_sidebar(e):
-            is_vis = not self.extender.sidebarScroll.isVisible()
-            self.extender.sidebarScroll.setVisible(is_vis)
-            if is_vis and hasattr(self.extender, 'split_pane'): 
-                w = self.extender.split_pane.getWidth()
-                target_loc = w - 260 if w > 300 else int(w * 0.7)
-                self.extender.split_pane.setDividerLocation(target_loc)
-            self.extender.mainPanel.revalidate()
-        self.extender.toolsBtn.addActionListener(toggle_sidebar)
-        topBar.add(self.extender.toolsBtn)
-
-        self.extender.toggleLayoutBtn = JButton(u"Toggle View")
-        style_btn(self.extender.toggleLayoutBtn)
-        def toggle_layout(e):
-            self.extender.is_vertical_layout = not self.extender.is_vertical_layout
-            self.extender.auto_arrange(None)
-        self.extender.toggleLayoutBtn.addActionListener(toggle_layout)
-        topBar.add(self.extender.toggleLayoutBtn)
-
         view_toggle_panel = JPanel(FlowLayout(FlowLayout.LEFT, 0, 0))
         btn_grp = ButtonGroup()
 
-        btn_map = JToggleButton("Visual Map")
         btn_grid = JToggleButton("Grid View")
         btn_features = JToggleButton("Features View")
+        btn_map = JToggleButton("Visual Map")
         btn_map.setSelected(True)
 
-        for b in [btn_map, btn_grid, btn_features]:
+        for b in [btn_grid, btn_features, btn_map]:
             style_btn(b)
             btn_grp.add(b)
             view_toggle_panel.add(b)
@@ -2325,13 +2304,11 @@ class UIBuilder(Runnable):
                 self.extender.close_feature_note()
             self.extender.update_toolbar()
 
-            # Contextual Toolbar Buttons
             is_map = (mode == "map")
             self.extender.toolsBtn.setVisible(is_map)
             self.extender.toggleLayoutBtn.setVisible(is_map)
             self.extender.relateBtn.setVisible(is_map)
 
-            # Hide Tabs for Feature View
             if mode == "features":
                 self.extender.mainPanel.remove(self.extender.tabbed_pane)
                 self.extender.mainPanel.add(self.extender.outer_split_pane, BorderLayout.CENTER)
@@ -2358,6 +2335,27 @@ class UIBuilder(Runnable):
         btn_features.addActionListener(lambda e: switch_view("features"))
 
         topBar.add(view_toggle_panel)
+
+        self.extender.toolsBtn = JButton(u"Tools")
+        style_btn(self.extender.toolsBtn)
+        def toggle_sidebar(e):
+            is_vis = not self.extender.sidebarScroll.isVisible()
+            self.extender.sidebarScroll.setVisible(is_vis)
+            if is_vis and hasattr(self.extender, 'split_pane'): 
+                w = self.extender.split_pane.getWidth()
+                target_loc = w - 260 if w > 300 else int(w * 0.7)
+                self.extender.split_pane.setDividerLocation(target_loc)
+            self.extender.mainPanel.revalidate()
+        self.extender.toolsBtn.addActionListener(toggle_sidebar)
+        topBar.add(self.extender.toolsBtn)
+
+        self.extender.toggleLayoutBtn = JButton(u"Toggle View")
+        style_btn(self.extender.toggleLayoutBtn)
+        def toggle_layout(e):
+            self.extender.is_vertical_layout = not self.extender.is_vertical_layout
+            self.extender.auto_arrange(None)
+        self.extender.toggleLayoutBtn.addActionListener(toggle_layout)
+        topBar.add(self.extender.toggleLayoutBtn)
 
         self.extender.relateBtn = JToggleButton(u"Relate Nodes")
         style_btn(self.extender.relateBtn)
