@@ -174,10 +174,14 @@ class FeaturesMasterTableModel(DefaultTableModel):
         return String
 
     def isCellEditable(self, row, col):
-        return col == 2
+        return col == 0 or col == 2
 
     def setValueAt(self, val, row, col):
-        if col == 2:
+        if col == 0:
+            feat = self.extender.visible_features[row]
+            feat["name"] = unicode(val) if val else u"Unnamed Feature"
+            self.extender.save_state()
+        elif col == 2:
             feat = self.extender.visible_features[row]
             feat["tested"] = bool(val)
             self.extender.save_state()
@@ -524,7 +528,6 @@ class MapMouseHandler(MouseAdapter):
             return
 
         if not self.has_dragged and not SwingUtilities.isRightMouseButton(e):
-            # Check for Method box hits
             hit_method = False
             for (bx, by, bw, bh, node, m) in self.extender.method_hitboxes:
                 if bx <= lx <= bx + bw and by <= ly <= by + bh:
@@ -1438,17 +1441,13 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
         attr_base = SimpleAttributeSet()
         StyleConstants.setForeground(attr_base, Color.WHITE)
         StyleConstants.setFontFamily(attr_base, "SansSerif")
-        StyleConstants.setFontSize(attr_base, 12)
+        StyleConstants.setFontSize(attr_base, 11)
 
         attr_method = SimpleAttributeSet(attr_base)
         StyleConstants.setForeground(attr_method, Color(11, 212, 87))
-        # Add bold to the HTTP method
-        #StyleConstants.setBold(attr_method, True)
 
         attr_header = SimpleAttributeSet(attr_base)
-        StyleConstants.setForeground(attr_header, Color(17, 204, 212))
-        # Add bold to the headers (optional)
-        #StyleConstants.setBold(attr_header, True)
+        StyleConstants.setForeground(attr_header, Color(17, 204, 212)) 
 
         lines = text.split('\n')
         if not lines: return
@@ -1460,26 +1459,26 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
                 break
 
         headers_end = body_idx if body_idx != -1 else len(lines)
-        first_line = lines[0] + "\n"
+        first_line = lines[0]
         
         if is_request:
             parts = first_line.split(" ", 1)
             if len(parts) == 2:
                 doc.insertString(doc.getLength(), parts[0] + " ", attr_method)
-                doc.insertString(doc.getLength(), parts[1] + "\n", attr_base)
+                doc.insertString(doc.getLength(), parts[1].strip('\r\n') + "\n", attr_base)
             else:
-                doc.insertString(doc.getLength(), first_line, attr_base)
+                doc.insertString(doc.getLength(), first_line.strip('\r\n') + "\n", attr_base)
         else:
-            doc.insertString(doc.getLength(), first_line, attr_base)
+            doc.insertString(doc.getLength(), first_line.strip('\r\n') + "\n", attr_base)
 
         for i in range(1, headers_end):
             line = lines[i]
             if ":" in line:
                 key, val = line.split(":", 1)
                 doc.insertString(doc.getLength(), key + ":", attr_header)
-                doc.insertString(doc.getLength(), val + "\n", attr_base)
+                doc.insertString(doc.getLength(), val.strip('\r\n') + "\n", attr_base)
             else:
-                doc.insertString(doc.getLength(), line + "\n", attr_header)
+                doc.insertString(doc.getLength(), line.strip('\r\n') + "\n", attr_header)
 
         if body_idx != -1:
             body_text = "\n".join(lines[body_idx:])
@@ -2579,55 +2578,72 @@ class UIBuilder(Runnable):
         view_toggle_panel = JPanel(FlowLayout(FlowLayout.LEFT, 0, 0))
         btn_grp = ButtonGroup()
 
+        btn_map = JToggleButton("Visual Map")
         btn_grid = JToggleButton("Grid View")
         btn_features = JToggleButton("Features View")
-        btn_map = JToggleButton("Visual Map")
         btn_map.setSelected(True)
 
-        for b in [btn_grid, btn_features, btn_map]:
+        for b in [btn_map, btn_grid, btn_features]:
             style_btn(b)
             btn_grp.add(b)
             view_toggle_panel.add(b)
 
-        def switch_view(mode):
-            self.extender.selected_nodes = set()
-            self.extender.selected_feature_req = None
-            self.extender.current_view_mode = mode
-            if hasattr(self.extender, 'close_feature_note'):
-                self.extender.close_feature_note()
-            self.extender.update_toolbar()
-
-            is_map = (mode == "map")
-            self.extender.toolsBtn.setVisible(is_map)
-            self.extender.toggleLayoutBtn.setVisible(is_map)
-            self.extender.relateBtn.setVisible(is_map)
-
-            if mode == "features":
-                self.extender.mainPanel.remove(self.extender.tabbed_pane)
-                self.extender.mainPanel.add(self.extender.outer_split_pane, BorderLayout.CENTER)
-            else:
-                self.extender.mainPanel.remove(self.extender.outer_split_pane)
-                self.extender.mainPanel.add(self.extender.tabbed_pane, BorderLayout.CENTER)
-                self.extender.on_tab_changed()
-
-            if mode == "map":
-                self.extender.viewCards.show(self.extender.viewContainer, "canvas")
-                self.extender.render_map()
-            elif mode == "grid":
-                self.extender.populate_grid()
-                self.extender.viewCards.show(self.extender.viewContainer, "grid")
-            elif mode == "features":
-                self.extender.update_features_master_table()
-                self.extender.viewCards.show(self.extender.viewContainer, "features")
-
-            self.extender.mainPanel.revalidate()
-            self.extender.mainPanel.repaint()
-
-        btn_map.addActionListener(lambda e: switch_view("map"))
-        btn_grid.addActionListener(lambda e: switch_view("grid"))
-        btn_features.addActionListener(lambda e: switch_view("features"))
-
         topBar.add(view_toggle_panel)
+
+        self.extender.grid_controls_panel = JPanel(FlowLayout(FlowLayout.LEFT, 5, 0))
+        self.extender.grid_controls_panel.setOpaque(False)
+        self.extender.grid_controls_panel.setVisible(False) 
+
+        addColBtn = JButton("[+] Add Col")
+        style_btn(addColBtn)
+        def add_col_action(e):
+            name = JOptionPane.showInputDialog(self.extender.mainPanel, "Enter column name:")
+            if name and name.strip():
+                self.extender.custom_columns.append(name.strip())
+                self.extender.table_model.addColumn(name.strip())
+                self.extender.save_state()
+        addColBtn.addActionListener(add_col_action)
+        self.extender.grid_controls_panel.add(addColBtn)
+
+        remColBtn = JButton("[-] Del Col")
+        style_btn(remColBtn)
+        def rem_col_action(e):
+            if not self.extender.custom_columns: return
+            res = JOptionPane.showInputDialog(self.extender.mainPanel, "Column to delete:", "Delete Column", JOptionPane.PLAIN_MESSAGE, None, self.extender.custom_columns, self.extender.custom_columns[0])
+            if res:
+                idx = self.extender.custom_columns.index(res)
+                self.extender.custom_columns.remove(res)
+                self.extender.table_model.setColumnCount(0)
+                for c in self.extender.table_model.base_cols + self.extender.custom_columns:
+                    self.extender.table_model.addColumn(c)
+                self.extender.populate_grid()
+                self.extender.save_state()
+        remColBtn.addActionListener(rem_col_action)
+        self.extender.grid_controls_panel.add(remColBtn)
+
+        delRowBtn = JButton("[x] Del Row")
+        style_btn(delRowBtn)
+        def del_row_action(e):
+            rows = self.extender.gridTable.getSelectedRows()
+            if rows:
+                nodes_to_del = [self.extender.table_model.row_nodes[r] for r in rows]
+                for n in nodes_to_del:
+                    self.extender.delete_nodes(n)
+                self.extender.populate_grid()
+        delRowBtn.addActionListener(del_row_action)
+        self.extender.grid_controls_panel.add(delRowBtn)
+
+        self.extender.grid_controls_panel.add(Box.createHorizontalStrut(10))
+        filter_lbl = JLabel("Method:")
+        filter_lbl.setForeground(Color.LIGHT_GRAY)
+        self.extender.grid_controls_panel.add(filter_lbl)
+        self.extender.grid_method_filter = style_textfield(JTextField("", 6), BURP_ORANGE)
+        def trigger_grid_filter(e):
+            self.extender.populate_grid()
+        self.extender.grid_method_filter.addKeyListener(type("FilterKey", (KeyAdapter,), {"keyReleased": lambda s, e: trigger_grid_filter(e)})())
+        self.extender.grid_controls_panel.add(self.extender.grid_method_filter)
+
+        topBar.add(self.extender.grid_controls_panel)
 
         self.extender.toolsBtn = JButton(u"Tools")
         style_btn(self.extender.toolsBtn)
@@ -2662,6 +2678,51 @@ class UIBuilder(Runnable):
             self.extender.render_map()
         self.extender.relateBtn.addActionListener(toggle_relate)
         topBar.add(self.extender.relateBtn)
+
+        def switch_view(mode):
+            try:
+                self.extender.selected_nodes = set()
+                self.extender.selected_method = None
+                self.extender.selected_feature_req = None
+                self.extender.current_view_mode = mode
+                if hasattr(self.extender, 'close_feature_note'):
+                    self.extender.close_feature_note()
+                self.extender.update_toolbar()
+
+                is_map = (mode == "map")
+                self.extender.toolsBtn.setVisible(is_map)
+                self.extender.toggleLayoutBtn.setVisible(is_map)
+                self.extender.relateBtn.setVisible(is_map)
+
+                is_grid = (mode == "grid")
+                self.extender.grid_controls_panel.setVisible(is_grid)
+
+                if mode == "features":
+                    self.extender.mainPanel.remove(self.extender.tabbed_pane)
+                    self.extender.mainPanel.add(self.extender.outer_split_pane, BorderLayout.CENTER)
+                else:
+                    self.extender.mainPanel.remove(self.extender.outer_split_pane)
+                    self.extender.mainPanel.add(self.extender.tabbed_pane, BorderLayout.CENTER)
+                    self.extender.on_tab_changed()
+
+                if mode == "map":
+                    self.extender.viewCards.show(self.extender.viewContainer, "canvas")
+                    self.extender.render_map()
+                elif mode == "grid":
+                    self.extender.populate_grid()
+                    self.extender.viewCards.show(self.extender.viewContainer, "grid")
+                elif mode == "features":
+                    self.extender.update_features_master_table()
+                    self.extender.viewCards.show(self.extender.viewContainer, "features")
+
+                self.extender.mainPanel.revalidate()
+                self.extender.mainPanel.repaint()
+            except Exception as ex:
+                self.extender.callbacks.printError("Error in switch_view: " + str(ex))
+
+        btn_map.addActionListener(lambda e: switch_view("map"))
+        btn_grid.addActionListener(lambda e: switch_view("grid"))
+        btn_features.addActionListener(lambda e: switch_view("features"))
 
         self.extender.mainPanel.add(topBar, BorderLayout.NORTH)
 
@@ -2846,57 +2907,6 @@ class UIBuilder(Runnable):
         self.extender.gridTable.addMouseListener(GridMouseHandler(self.extender))
 
         grid_wrapper = JPanel(BorderLayout())
-        grid_toolbar = JPanel(FlowLayout(FlowLayout.LEFT))
-
-        addColBtn = JButton("[+] Add Column")
-        style_btn(addColBtn)
-        def add_col_action(e):
-            name = JOptionPane.showInputDialog(self.extender.mainPanel, "Enter column name:")
-            if name and name.strip():
-                self.extender.custom_columns.append(name.strip())
-                self.extender.table_model.addColumn(name.strip())
-                self.extender.save_state()
-        addColBtn.addActionListener(add_col_action)
-        grid_toolbar.add(addColBtn)
-
-        remColBtn = JButton("[-] Delete Column")
-        style_btn(remColBtn)
-        def rem_col_action(e):
-            if not self.extender.custom_columns: return
-            res = JOptionPane.showInputDialog(self.extender.mainPanel, "Column to delete:", "Delete Column", JOptionPane.PLAIN_MESSAGE, None, self.extender.custom_columns, self.extender.custom_columns[0])
-            if res:
-                idx = self.extender.custom_columns.index(res)
-                self.extender.custom_columns.remove(res)
-                self.extender.table_model.setColumnCount(0)
-                for c in self.extender.table_model.base_cols + self.extender.custom_columns:
-                    self.extender.table_model.addColumn(c)
-                self.extender.populate_grid()
-                self.extender.save_state()
-        remColBtn.addActionListener(rem_col_action)
-        grid_toolbar.add(remColBtn)
-
-        delRowBtn = JButton("[x] Delete Line")
-        style_btn(delRowBtn)
-        def del_row_action(e):
-            rows = self.extender.gridTable.getSelectedRows()
-            if rows:
-                nodes_to_del = [self.extender.table_model.row_nodes[r] for r in rows]
-                for n in nodes_to_del:
-                    self.extender.delete_nodes(n)
-                self.extender.populate_grid()
-        delRowBtn.addActionListener(del_row_action)
-        grid_toolbar.add(delRowBtn)
-
-        grid_toolbar.add(Box.createHorizontalStrut(15))
-        grid_toolbar.add(JLabel("Filter Method: "))
-        self.extender.grid_method_filter = style_textfield(JTextField("", 10), BURP_ORANGE)
-        def trigger_grid_filter(e):
-            self.extender.populate_grid()
-        self.extender.grid_method_filter.addKeyListener(type("FilterKey", (KeyAdapter,), {"keyReleased": lambda s, e: trigger_grid_filter(e)})())
-        grid_toolbar.add(self.extender.grid_method_filter)
-
-        grid_wrapper.add(grid_toolbar, BorderLayout.NORTH)
-
         self.extender.gridScroll = JScrollPane(self.extender.gridTable)
         self.extender.gridScroll.setBorder(BorderFactory.createEmptyBorder())
         grid_wrapper.add(self.extender.gridScroll, BorderLayout.CENTER)
@@ -2998,7 +3008,6 @@ class UIBuilder(Runnable):
                 self.extender.save_state()
                 self.extender.editing_feature = None
             self.extender.feature_note_scroll.setVisible(False)
-            self.extender.features_master_table.getParent().revalidate()
 
         self.extender.close_feature_note = close_feature_note
 
@@ -3012,13 +3021,13 @@ class UIBuilder(Runnable):
                 self.extender.selected_feature_req = None
                 self.extender.update_toolbar()
             else:
+                # Still show notes on single click if needed
                 if e.getClickCount() == 1:
                     feat = self.extender.visible_features[row]
                     self.extender.editing_feature = feat
                     self.extender.feature_note_area.setText(feat.get("notes", ""))
                     self.extender.feature_note_scroll.setVisible(True)
                     self.extender.feature_note_area.requestFocusInWindow()
-                    self.extender.features_master_table.getParent().revalidate()
 
         self.extender.features_master_table.addMouseListener(type("MasterMouseListener", (MouseAdapter,), {"mouseClicked": lambda s, e: feat_master_mouse_clicked(e)})())
 
@@ -3034,11 +3043,10 @@ class UIBuilder(Runnable):
         self.extender.features_reqs_table = JTable(self.extender.features_reqs_model)
         self.extender.features_reqs_table.setFillsViewportHeight(True)
 
-        reqs_method_col = self.extender.features_reqs_table.getColumnModel().getColumn(0)
-        reqs_method_col.setMaxWidth(65)
-        
-        reqs_notes_col = self.extender.features_reqs_table.getColumnModel().getColumn(2)
-        reqs_notes_col.setPreferredWidth(350)
+        method_col = self.extender.features_reqs_table.getColumnModel().getColumn(0)
+        method_col.setMinWidth(65)
+        method_col.setMaxWidth(85)
+        method_col.setPreferredWidth(70)
 
         def feat_req_selected(e):
             if e.getValueIsAdjusting(): return
@@ -3199,6 +3207,7 @@ class UIBuilder(Runnable):
         self.extender.request_panel.setVisible(False)
 
         self.extender.outer_split_pane = JSplitPane(JSplitPane.VERTICAL_SPLIT, self.extender.split_pane, self.extender.request_panel)
+        # 0.40 Resize weight to increase the default height of the traffic preview to twice its size.
         self.extender.outer_split_pane.setResizeWeight(0.40)
         self.extender.outer_split_pane.setContinuousLayout(True)
         self.extender.outer_split_pane.setBorder(BorderFactory.createEmptyBorder())
