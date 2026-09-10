@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 from burp import IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExtensionStateListener
-from javax.swing import JPanel, JLabel, JTextArea, JTextField, JButton, JToggleButton, JScrollPane, JOptionPane, BorderFactory, UIManager, SwingUtilities, ImageIcon, JPopupMenu, JMenuItem, AbstractAction, KeyStroke, JComponent, JFileChooser, JCheckBox, JMenu, BoxLayout, Box, JSplitPane, JTable, JTabbedPane, ButtonGroup, ListSelectionModel
+from javax.swing import JPanel, JLabel, JTextArea, JTextField, JButton, JToggleButton, JScrollPane, JOptionPane, BorderFactory, UIManager, SwingUtilities, ImageIcon, JPopupMenu, JMenuItem, AbstractAction, KeyStroke, JComponent, JFileChooser, JCheckBox, JMenu, BoxLayout, Box, JSplitPane, JTable, JTabbedPane, ButtonGroup, ListSelectionModel, JTextPane
 from javax.swing.table import DefaultTableModel
+from javax.swing.text import SimpleAttributeSet, StyleConstants
 from java.awt import BorderLayout, FlowLayout, GridLayout, Color, BasicStroke, RenderingHints, Cursor, Toolkit, Font, Polygon, Dimension, CardLayout, Insets
 from java.awt.datatransfer import StringSelection, DataFlavor
 from java.awt.event import MouseAdapter, KeyEvent, KeyAdapter, FocusListener
@@ -49,6 +50,7 @@ class MindMapNode:
         self.subtree_width = 0
 
         self.methods = set()
+        self.method_requests = {} 
         self.statuses = set()
         self.content_lengths = set()
         self.severity = None 
@@ -96,12 +98,12 @@ class MindMapNode:
 class MindMapTableModel(DefaultTableModel):
     def __init__(self, extender):
         self.extender = extender
-        self.base_cols = ["URL", "Endpoint", "Tested", "Note"]
+        self.base_cols = ["Method", "URL", "Endpoint", "Tested", "Note"]
         self.row_nodes = []
         DefaultTableModel.__init__(self, 0, len(self.base_cols) + len(self.extender.custom_columns))
 
     def getColumnCount(self):
-        if not hasattr(self, 'extender'): return 3
+        if not hasattr(self, 'extender'): return 5
         return len(self.base_cols) + len(self.extender.custom_columns)
 
     def getColumnName(self, col):
@@ -110,31 +112,33 @@ class MindMapTableModel(DefaultTableModel):
         return self.extender.custom_columns[col - len(self.base_cols)]
 
     def getColumnClass(self, col):
-        if col == 2: return Boolean
+        if col == 3: return Boolean
         return String
 
     def isCellEditable(self, row, col):
-        return col >= 2 
+        return col >= 3
 
     def getValueAt(self, row, col):
         if row >= len(self.row_nodes): return ""
         node = self.row_nodes[row]
         if col == 0:
+            return ", ".join(sorted(list(node.methods)))
+        elif col == 1:
             try:
                 u = URL(node.get_full_url())
                 domain = u.getProtocol() + "://" + u.getHost()
                 if u.getPort() not in [-1, 80, 443]: domain += ":" + str(u.getPort())
                 return domain
             except: return ""
-        elif col == 1:
+        elif col == 2:
             try:
                 u = URL(node.get_full_url())
                 endpoint = u.getPath()
                 return endpoint if endpoint else "/"
             except: return node.text
-        elif col == 2:
-            return Boolean(node.status == "Tested")
         elif col == 3:
+            return Boolean(node.status == "Tested")
+        elif col == 4:
             return node.note
         else:
             col_name = self.getColumnName(col)
@@ -142,19 +146,19 @@ class MindMapTableModel(DefaultTableModel):
 
     def setValueAt(self, val, row, col):
         node = self.row_nodes[row]
-        if col == 2:
+        if col == 3:
             if val: node.status = "Tested"
             else:
                 if node.status == "Tested": node.status = ""
             self.extender.save_state()
             if getattr(self.extender, 'current_view_mode', 'map') == 'map':
                 self.extender.render_map()
-        elif col == 3:
+        elif col == 4:
             node.note = unicode(val) if val else u""
             self.extender.save_state()
             if getattr(self.extender, 'current_view_mode', 'map') == 'map':
                 self.extender.render_map()
-        elif col > 3:
+        elif col > 4:
             col_name = self.getColumnName(col)
             node.custom_cols[col_name] = unicode(val) if val else u""
             self.extender.save_state()
@@ -292,9 +296,13 @@ class GridMouseHandler(MouseAdapter):
             if row >= 0:
                 if not self.extender.gridTable.isRowSelected(row):
                     self.extender.gridTable.setRowSelectionInterval(row, row)
-                node = self.extender.table_model.row_nodes[row]
-                self.extender.selected_nodes = {node}
+                
+                selected_rows = self.extender.gridTable.getSelectedRows()
+                nodes = [self.extender.table_model.row_nodes[r] for r in selected_rows]
+                self.extender.selected_nodes = set(nodes)
                 self.extender.update_toolbar()
+                
+                node = self.extender.table_model.row_nodes[row]
                 self.extender.show_context_menu(e.getComponent(), e.getX(), e.getY(), node)
 
 class MapMouseHandler(MouseAdapter):
@@ -340,6 +348,7 @@ class MapMouseHandler(MouseAdapter):
                 if node not in self.extender.selected_nodes:
                     self.extender.selected_nodes = {node}
                     self.extender.selected_relation = None
+                    self.extender.selected_method = None
                     self.extender.update_toolbar()
                     self.extender.render_map()
                 self.extender.show_context_menu(e.getComponent(), e.getX(), e.getY(), node)
@@ -512,6 +521,25 @@ class MapMouseHandler(MouseAdapter):
         if e.getClickCount() == 2 and not SwingUtilities.isRightMouseButton(e):
             node = self.extender.get_node_at(lx, ly)
             if node: self.extender.trigger_inline_edit(node)
+            return
+
+        if not self.has_dragged and not SwingUtilities.isRightMouseButton(e):
+            # Check for Method box hits
+            hit_method = False
+            for (bx, by, bw, bh, node, m) in self.extender.method_hitboxes:
+                if bx <= lx <= bx + bw and by <= ly <= by + bh:
+                    self.extender.selected_nodes = {node}
+                    self.extender.selected_method = m
+                    self.extender.update_toolbar()
+                    hit_method = True
+                    break
+            
+            if not hit_method:
+                node = self.extender.get_node_at(lx, ly)
+                if node:
+                    self.extender.selected_method = None
+                    self.extender.update_toolbar()
+
 
 class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExtensionStateListener):
     def registerExtenderCallbacks(self, callbacks):
@@ -525,8 +553,10 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
 
         self.selected_nodes = set() 
         self.selected_relation = None
+        self.selected_method = None
         self.zoom_factor = 1.0 
         self.relation_paths = {}
+        self.method_hitboxes = []
 
         self.is_vertical_layout = False
         self.current_theme = "Vibrant"
@@ -774,12 +804,18 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
                     xml_data.append(' <Worksheet ss:Name="{}">'.format(sheet_name))
                     xml_data.append('  <Table>')
 
-                    xml_data.append('   <Column ss:Width="432"/>') 
-                    xml_data.append('   <Column ss:Width="80"/>')  
+                    xml_data.append('   <Column ss:Width="60"/>') 
+                    xml_data.append('   <Column ss:Width="300"/>') 
+                    xml_data.append('   <Column ss:Width="100"/>')
+                    xml_data.append('   <Column ss:Width="60"/>')  
+                    xml_data.append('   <Column ss:Width="200"/>') 
 
                     xml_data.append('   <Row>')
+                    xml_data.append('    <Cell ss:StyleID="HeaderL"><Data ss:Type="String">Method</Data></Cell>')
                     xml_data.append('    <Cell ss:StyleID="HeaderL"><Data ss:Type="String">URL</Data></Cell>')
-                    xml_data.append('    <Cell ss:StyleID="HeaderR"><Data ss:Type="String">Tested</Data></Cell>')
+                    xml_data.append('    <Cell ss:StyleID="HeaderL"><Data ss:Type="String">Endpoint</Data></Cell>')
+                    xml_data.append('    <Cell ss:StyleID="HeaderL"><Data ss:Type="String">Tested</Data></Cell>')
+                    xml_data.append('    <Cell ss:StyleID="HeaderR"><Data ss:Type="String">Notes</Data></Cell>')
                     xml_data.append('   </Row>')
 
                     rows_data = []
@@ -798,14 +834,16 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
                             if not any(endpoint.lower().endswith(ext) for ext in excluded_exts):
                                 is_tested = True if node.status == "Tested" else False
                                 ep_clean = endpoint.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-                                rows_data.append((ep_clean, is_tested))
+                                meths = ", ".join(node.methods)
+                                nts = node.note.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                                rows_data.append((meths, full_url, ep_clean, is_tested, nts))
 
                         for child in node.children:
                             traverse_excel(child)
 
                     traverse_excel(root)
 
-                    for idx, (ep_clean, is_tested) in enumerate(rows_data):
+                    for idx, (meths, full_url, ep_clean, is_tested, nts) in enumerate(rows_data):
                         is_last = (idx == len(rows_data) - 1)
                         if is_last:
                             style_L = "BotTestL" if is_tested else "BotL"
@@ -817,8 +855,11 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
                         tested_str = "Yes" if is_tested else "No"
 
                         xml_data.append('   <Row>')
+                        xml_data.append('    <Cell ss:StyleID="{}"><Data ss:Type="String">{}</Data></Cell>'.format(style_L, meths))
+                        xml_data.append('    <Cell ss:StyleID="{}"><Data ss:Type="String">{}</Data></Cell>'.format(style_L, full_url))
                         xml_data.append('    <Cell ss:StyleID="{}"><Data ss:Type="String">{}</Data></Cell>'.format(style_L, ep_clean))
-                        xml_data.append('    <Cell ss:StyleID="{}"><Data ss:Type="String">{}</Data></Cell>'.format(style_R, tested_str))
+                        xml_data.append('    <Cell ss:StyleID="{}"><Data ss:Type="String">{}</Data></Cell>'.format(style_L, tested_str))
+                        xml_data.append('    <Cell ss:StyleID="{}"><Data ss:Type="String">{}</Data></Cell>'.format(style_R, nts))
                         xml_data.append('   </Row>')
 
                     xml_data.append('  </Table>')
@@ -1027,7 +1068,11 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
 
             new_node = MindMapNode(node_title.strip(), parent=target_root)
             new_node.is_playbook_node = True
-            new_node.linked_request = self.callbacks.saveBuffersToTempFiles(reqRes) 
+            
+            method = info.getMethod()
+            new_node.methods.add(method)
+            new_node.method_requests[method] = self.callbacks.saveBuffersToTempFiles(reqRes)
+            new_node.linked_request = new_node.method_requests[method]
 
             dummy_label = JLabel()
             fm = dummy_label.getFontMetrics(dummy_label.getFont())
@@ -1162,7 +1207,9 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
         current_node.params.update(params)
         if len(current_node.params) > before_p: is_new_data = True
 
-        current_node.linked_request = self.callbacks.saveBuffersToTempFiles(reqRes)
+        saved_req_res = self.callbacks.saveBuffersToTempFiles(reqRes)
+        current_node.method_requests[method] = saved_req_res
+        current_node.linked_request = saved_req_res 
 
         if toolFlag == self.callbacks.TOOL_REPEATER:
             if current_node.status != "Tested":
@@ -1204,6 +1251,7 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
 
         self.relationships = state.get("relationships", [])
         self.selected_nodes = set()
+        self.selected_method = None
         self.update_toolbar()
 
         if hasattr(self, 'features_master_model'):
@@ -1271,6 +1319,172 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
 
         return search(self.activeRoot)
 
+    def add_nodes_to_feature(self, nodes_to_add):
+        if not nodes_to_add: return
+        
+        valid_nodes = []
+        for n in nodes_to_add:
+            if n.linked_request or n.methods:
+                valid_nodes.append(n)
+                
+        if not valid_nodes:
+            JOptionPane.showMessageDialog(self.mainPanel, "Selected nodes do not have associated HTTP requests.")
+            return
+
+        options = [f["name"] for f in self.features]
+        options.append("[+] Create New Feature")
+        
+        choice = JOptionPane.showInputDialog(
+            self.mainPanel, 
+            "Select a Feature to add {} request(s) to:".format(len(valid_nodes)), 
+            "Add to Feature", 
+            JOptionPane.QUESTION_MESSAGE, 
+            None, 
+            options, 
+            options[0] if options else None
+        )
+        
+        if not choice: return
+        
+        target_feature = None
+        if choice == "[+] Create New Feature":
+            new_name = JOptionPane.showInputDialog(self.mainPanel, "Enter New Feature Name:")
+            if not new_name or not new_name.strip(): return
+            target_feature = {
+                "id": str(uuid.uuid4()),
+                "name": new_name.strip(),
+                "requests": [],
+                "notes": "",
+                "tested": False
+            }
+            self.features.append(target_feature)
+        else:
+            for f in self.features:
+                if f["name"] == choice:
+                    target_feature = f
+                    break
+                    
+        if not target_feature: return
+
+        added_count = 0
+        for node in valid_nodes:
+            methods_to_add = node.method_requests.keys() if node.method_requests else [None]
+            
+            for m in methods_to_add:
+                req_b64 = ""
+                res_b64 = ""
+                svc_data = None
+                method = m if m else "GET"
+                
+                reqRes = node.method_requests.get(m) if m else node.linked_request
+                
+                if reqRes:
+                    req_bytes = reqRes.getRequest()
+                    res_bytes = reqRes.getResponse()
+                    svc = reqRes.getHttpService()
+                    if req_bytes:
+                        req_b64 = self.helpers.bytesToString(self.helpers.base64Encode(req_bytes))
+                        try:
+                            info = self.helpers.analyzeRequest(req_bytes)
+                            method = info.getMethod()
+                        except: pass
+                    if res_bytes:
+                        res_b64 = self.helpers.bytesToString(self.helpers.base64Encode(res_bytes))
+                    if svc:
+                        svc_data = {
+                            "host": svc.getHost(),
+                            "port": svc.getPort(),
+                            "protocol": svc.getProtocol()
+                        }
+                else:
+                    host, port, use_https, req_bytes = self.build_http_request(node)
+                    if req_bytes:
+                        req_b64 = self.helpers.bytesToString(self.helpers.base64Encode(req_bytes))
+                        try:
+                            info = self.helpers.analyzeRequest(req_bytes)
+                            method = info.getMethod()
+                        except: pass
+                        svc_data = {
+                            "host": host,
+                            "port": port,
+                            "protocol": "https" if use_https else "http"
+                        }
+                        
+                if req_b64:
+                    target_feature["requests"].append({
+                        "id": str(uuid.uuid4()),
+                        "method": method,
+                        "url": node.get_full_url(),
+                        "notes": "",
+                        "req_b64": req_b64,
+                        "res_b64": res_b64,
+                        "svc_data": svc_data
+                    })
+                    added_count += 1
+                
+        if added_count > 0:
+            self.save_state()
+            if getattr(self, 'current_view_mode', 'map') == 'features':
+                self.update_features_master_table()
+                if hasattr(self, 'features_reqs_model') and self.features_reqs_model.current_feature == target_feature:
+                    self.update_features_detail_table()
+            JOptionPane.showMessageDialog(self.mainPanel, "Successfully added {} request(s) to Feature: {}".format(added_count, target_feature["name"]))
+
+    def set_highlighted_text(self, text_pane, text, is_request):
+        doc = text_pane.getStyledDocument()
+        doc.remove(0, doc.getLength())
+        if not text: return
+
+        attr_base = SimpleAttributeSet()
+        StyleConstants.setForeground(attr_base, Color.WHITE)
+        StyleConstants.setFontFamily(attr_base, "SansSerif")
+        StyleConstants.setFontSize(attr_base, 12)
+
+        attr_method = SimpleAttributeSet(attr_base)
+        StyleConstants.setForeground(attr_method, Color(11, 212, 87))
+        # Add bold to the HTTP method
+        #StyleConstants.setBold(attr_method, True)
+
+        attr_header = SimpleAttributeSet(attr_base)
+        StyleConstants.setForeground(attr_header, Color(17, 204, 212))
+        # Add bold to the headers (optional)
+        #StyleConstants.setBold(attr_header, True)
+
+        lines = text.split('\n')
+        if not lines: return
+
+        body_idx = -1
+        for i, line in enumerate(lines):
+            if line.strip() == "":
+                body_idx = i
+                break
+
+        headers_end = body_idx if body_idx != -1 else len(lines)
+        first_line = lines[0] + "\n"
+        
+        if is_request:
+            parts = first_line.split(" ", 1)
+            if len(parts) == 2:
+                doc.insertString(doc.getLength(), parts[0] + " ", attr_method)
+                doc.insertString(doc.getLength(), parts[1] + "\n", attr_base)
+            else:
+                doc.insertString(doc.getLength(), first_line, attr_base)
+        else:
+            doc.insertString(doc.getLength(), first_line, attr_base)
+
+        for i in range(1, headers_end):
+            line = lines[i]
+            if ":" in line:
+                key, val = line.split(":", 1)
+                doc.insertString(doc.getLength(), key + ":", attr_header)
+                doc.insertString(doc.getLength(), val + "\n", attr_base)
+            else:
+                doc.insertString(doc.getLength(), line + "\n", attr_header)
+
+        if body_idx != -1:
+            body_text = "\n".join(lines[body_idx:])
+            doc.insertString(doc.getLength(), body_text, attr_base)
+
     def update_toolbar(self):
         has_selection = len(self.selected_nodes) > 0
         if hasattr(self, 'color_bar') and self.color_bar.isVisible() != has_selection:
@@ -1281,27 +1495,39 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
             res_str = ""
             MAX_PREVIEW_LEN = 100000 
 
-            if len(self.selected_nodes) == 1 and getattr(self, 'current_view_mode', 'map') != 'features':
-                node = list(self.selected_nodes)[0]
-                has_http_data = (len(node.statuses) > 0) or (node.linked_request is not None) or (len(node.methods) > 0)
+            if len(self.selected_nodes) > 0 and getattr(self, 'current_view_mode', 'map') != 'features':
+                node = list(self.selected_nodes)[0] 
+                
+                req_bytes = None
+                res_bytes = None
+                
+                if hasattr(self, 'selected_method') and self.selected_method:
+                    target_req = node.method_requests.get(self.selected_method)
+                    if target_req:
+                        req_bytes = target_req.getRequest()
+                        res_bytes = target_req.getResponse()
+                
+                if not req_bytes and node.linked_request:
+                    req_bytes = node.linked_request.getRequest()
+                    res_bytes = node.linked_request.getResponse()
+                    
+                has_http_data = (len(node.statuses) > 0) or (req_bytes is not None) or (len(node.methods) > 0)
 
                 if not getattr(node, 'is_manual', False) and has_http_data:
-                    if node.linked_request:
-                        req_bytes = node.linked_request.getRequest()
-                        res_bytes = node.linked_request.getResponse()
-                        if req_bytes: 
-                            req_str = self.helpers.bytesToString(req_bytes).replace('\x00', '')
-                            if len(req_str) > MAX_PREVIEW_LEN: req_str = req_str[:MAX_PREVIEW_LEN] + "\n\n... [TRUNCATED] ..."
-                            req_str = req_str.replace('\r\n', '\n') 
-                        if res_bytes: 
-                            res_str = self.helpers.bytesToString(res_bytes).replace('\x00', '')
-                            if len(res_str) > MAX_PREVIEW_LEN: res_str = res_str[:MAX_PREVIEW_LEN] + "\n\n... [TRUNCATED] ..."
-                            res_str = res_str.replace('\r\n', '\n')
+                    if req_bytes: 
+                        req_str = self.helpers.bytesToString(req_bytes).replace('\x00', '')
+                        if len(req_str) > MAX_PREVIEW_LEN: req_str = req_str[:MAX_PREVIEW_LEN] + "\n\n... [TRUNCATED] ..."
+                        req_str = req_str.replace('\r\n', '\n') 
                     else:
                         host, port, use_https, req = self.build_http_request(node)
                         if req: 
                             req_str = self.helpers.bytesToString(req).replace('\r\n', '\n')
                             res_str = "[Preview not available - No linked request]"
+                    
+                    if res_bytes: 
+                        res_str = self.helpers.bytesToString(res_bytes).replace('\x00', '')
+                        if len(res_str) > MAX_PREVIEW_LEN: res_str = res_str[:MAX_PREVIEW_LEN] + "\n\n... [TRUNCATED] ..."
+                        res_str = res_str.replace('\r\n', '\n')
 
             elif getattr(self, 'current_view_mode', 'map') == 'features' and getattr(self, 'selected_feature_req', None):
                 f_req = self.selected_feature_req
@@ -1313,14 +1539,14 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
                     res_str = self.helpers.bytesToString(res_bytes).replace('\x00', '').replace('\r\n', '\n')
 
             if req_str or res_str:
-                self.request_text.setText(req_str)
+                self.set_highlighted_text(self.request_text, req_str, True)
                 self.request_text.setCaretPosition(0)
-                self.response_text.setText(res_str)
+                self.set_highlighted_text(self.response_text, res_str, False)
                 self.response_text.setCaretPosition(0)
                 if not self.request_panel.isVisible():
                     self.request_panel.setVisible(True)
                     if hasattr(self, 'outer_split_pane') and hasattr(self, 'mainPanel'):
-                        self.outer_split_pane.setDividerLocation(int(self.mainPanel.getHeight() * 0.65))
+                        self.outer_split_pane.setDividerLocation(int(self.mainPanel.getHeight() * 0.40))
                         SwingUtilities.invokeLater(lambda: self.traffic_split.setDividerLocation(0.5))
             else:
                 self.request_panel.setVisible(False)
@@ -1377,6 +1603,12 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
         note_item.addActionListener(lambda e: self.edit_note(node))
         menu.add(note_item)
         menu.addSeparator()
+        
+        add_feat_item = JMenuItem("Add to Features View" + suffix)
+        add_feat_item.addActionListener(lambda e: self.add_nodes_to_feature(list(self.selected_nodes)))
+        menu.add(add_feat_item)
+        menu.addSeparator()
+        
         add_item = JMenuItem("Add Child Box")
         add_item.addActionListener(lambda e: self.add_custom_node(node))
         menu.add(add_item)
@@ -1517,6 +1749,19 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
         return Color(r, g, b, a)
 
     def serialize_node(self, node):
+        method_reqs = {}
+        for m, reqRes in node.method_requests.items():
+            if reqRes:
+                req = reqRes.getRequest()
+                res = reqRes.getResponse()
+                svc = reqRes.getHttpService()
+                m_req_b64 = self.helpers.bytesToString(self.helpers.base64Encode(req)) if req else ""
+                m_res_b64 = self.helpers.bytesToString(self.helpers.base64Encode(res)) if res else ""
+                m_svc_data = None
+                if svc:
+                    m_svc_data = {"host": svc.getHost(), "port": svc.getPort(), "protocol": svc.getProtocol()}
+                method_reqs[m] = {"req": m_req_b64, "res": m_res_b64, "svc": m_svc_data}
+
         req_b64 = ""
         res_b64 = ""
         svc_data = None
@@ -1524,10 +1769,8 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
         if node.linked_request:
             req = node.linked_request.getRequest()
             if req: req_b64 = self.helpers.bytesToString(self.helpers.base64Encode(req))
-
             res = node.linked_request.getResponse()
             if res: res_b64 = self.helpers.bytesToString(self.helpers.base64Encode(res))
-
             svc = node.linked_request.getHttpService()
             if svc:
                 svc_data = {
@@ -1551,6 +1794,7 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
             "req_b64": req_b64,
             "res_b64": res_b64,
             "svc_data": svc_data,
+            "method_requests": method_reqs,
             "custom_cols": getattr(node, 'custom_cols', {}),
             "children": [self.serialize_node(child) for child in node.children]
         }
@@ -1583,12 +1827,24 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
         if req_b64 or res_b64:
             req_bytes = self.helpers.base64Decode(req_b64) if req_b64 else None
             res_bytes = self.helpers.base64Decode(res_b64) if res_b64 else None
-
             svc = None
             if svc_data:
                 svc = RestoredHttpService(svc_data["host"], svc_data["port"], svc_data["protocol"])
-
             node.linked_request = RestoredReqRes(req_bytes, res_bytes, svc)
+            
+        node.method_requests = {}
+        if "method_requests" in data:
+            for m, m_data in data["method_requests"].items():
+                m_req_b64 = m_data.get("req", "")
+                m_res_b64 = m_data.get("res", "")
+                m_svc_data = m_data.get("svc", None)
+                
+                req_bytes = self.helpers.base64Decode(m_req_b64) if m_req_b64 else None
+                res_bytes = self.helpers.base64Decode(m_res_b64) if m_res_b64 else None
+                svc = None
+                if m_svc_data:
+                    svc = RestoredHttpService(m_svc_data["host"], m_svc_data["port"], m_svc_data["protocol"])
+                node.method_requests[m] = RestoredReqRes(req_bytes, res_bytes, svc)
 
         for child_data in data.get("children", []):
             node.children.append(self.deserialize_node(child_data, node))
@@ -1753,6 +2009,10 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
         self.table_model.row_nodes = []
         if not self.activeRoot: return
 
+        filter_method = ""
+        if hasattr(self, 'grid_method_filter'):
+            filter_method = self.grid_method_filter.getText().strip().upper()
+
         def traverse(node):
             if not self.should_show(node): return
 
@@ -1760,10 +2020,16 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
 
             if node != self.activeRoot:
                 if not getattr(node, 'is_manual', False) and has_http_data:
-                    self.table_model.row_nodes.append(node)
-                    row_data = ["", "", False, ""]
-                    for _ in self.custom_columns: row_data.append("")
-                    self.table_model.addRow(row_data)
+                    match = True
+                    if filter_method:
+                        if not any(filter_method in m for m in node.methods):
+                            match = False
+                    
+                    if match:
+                        self.table_model.row_nodes.append(node)
+                        row_data = ["", "", "", False, ""]
+                        for _ in self.custom_columns: row_data.append("")
+                        self.table_model.addRow(row_data)
 
             if getattr(node, 'collapsed', False): return 
 
@@ -1784,6 +2050,7 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
         panel.repaint()
 
         self.selected_nodes = set()
+        self.selected_method = None
         self.selected_feature_req = None
         self.update_toolbar()
         self.auto_arrange(None)
@@ -1864,6 +2131,8 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
     def render_map(self):
         if not self.activeRoot: return
 
+        self.method_hitboxes = []
+
         def find_max_bounds(node):
             if not self.should_show(node):
                 return 0, 0
@@ -1929,11 +2198,13 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
     def calculate_subtree_dimensions(self, node, metrics):
         display_text = node.text
         show_status = not hasattr(self, 'status_cb') or self.status_cb.isSelected()
-        badge_text = ""
-        if node.methods or (node.statuses and show_status):
-            badge_text = " ".join(node.methods)
-            if node.statuses and show_status:
-                badge_text += " [" + ",".join([str(s) for s in node.statuses]) + "]"
+        
+        badge_text_length = 0
+        if node.methods:
+            badge_text_length += sum([metrics.stringWidth(m) + 4 for m in node.methods])
+        if node.statuses and show_status:
+            st_text = " [" + ",".join([str(s) for s in node.statuses]) + "]"
+            badge_text_length += metrics.stringWidth(st_text)
 
         show_params = hasattr(self, 'params_cb') and self.params_cb.isSelected() and node.params
         max_param_w = 0
@@ -1951,7 +2222,7 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
             text_lines = display_text.split("\n")
             w1 = max([metrics.stringWidth(line) for line in text_lines]) if text_lines else 0
 
-        w2 = metrics.stringWidth(badge_text) - 10 if badge_text else 0
+        w2 = badge_text_length if badge_text_length > 0 else 0
 
         if not getattr(node, 'manual_resize', False):
             min_w = max(w1, w2, max_param_w) + 24
@@ -2149,15 +2420,37 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
 
             g2d.setFont(Font("SansSerif", Font.PLAIN, 10))
             badge_metrics = g2d.getFontMetrics()
-
-            badge_text = " ".join(node.methods)
+            
+            total_methods_width = sum([badge_metrics.stringWidth(m) for m in node.methods]) + (len(node.methods) - 1) * 4 if node.methods else 0
+            
+            st_text = ""
             if node.statuses and show_status:
-                badge_text += " [" + ",".join([str(s) for s in node.statuses]) + "]"
+                st_text = " [" + ",".join([str(s) for s in node.statuses]) + "]"
+            
+            total_badge_width = total_methods_width + badge_metrics.stringWidth(st_text)
 
-            bx = int(node.x + (node.width - badge_metrics.stringWidth(badge_text)) / 2)
+            bx = int(node.x + (node.width - total_badge_width) / 2)
             by = int(start_y + (len(text_lines) * line_height) + 4)
-            g2d.setColor(Color.GRAY)
-            g2d.drawString(badge_text, bx, by)
+            
+            current_bx = bx
+            if node.methods:
+                for m in node.methods:
+                    m_w = badge_metrics.stringWidth(m)
+                    
+                    if getattr(self, 'selected_method', None) == m and node in self.selected_nodes:
+                        g2d.setColor(Color(17, 204, 212)) 
+                    else:
+                        g2d.setColor(Color.GRAY)
+                    
+                    g2d.drawString(m, current_bx, by)
+                    
+                    self.method_hitboxes.append((current_bx, by - 10, m_w, 14, node, m))
+                    current_bx += m_w + 4
+            
+            if st_text:
+                g2d.setColor(Color.GRAY)
+                g2d.drawString(st_text, current_bx, by)
+                
             g2d.setFont(base_font) 
         else:
             total_text_height = len(text_lines) * line_height
@@ -2521,14 +2814,22 @@ class UIBuilder(Runnable):
         self.extender.gridTable.setRowHeight(25)
         self.extender.gridTable.setFillsViewportHeight(True)
         self.extender.gridTable.getTableHeader().setFont(Font("SansSerif", Font.BOLD, 12))
+        
+        self.extender.gridTable.getColumnModel().getColumn(0).setMinWidth(60)
+        self.extender.gridTable.getColumnModel().getColumn(0).setMaxWidth(100)
+        self.extender.gridTable.getColumnModel().getColumn(3).setMinWidth(40)
+        self.extender.gridTable.getColumnModel().getColumn(3).setMaxWidth(50)
+        self.extender.gridTable.getColumnModel().getColumn(4).setPreferredWidth(250)
 
         def row_selected(e):
             if e.getValueIsAdjusting(): return
-            row = self.extender.gridTable.getSelectedRow()
-            if row >= 0 and row < len(self.extender.table_model.row_nodes):
-                node = self.extender.table_model.row_nodes[row]
-                self.extender.selected_nodes = {node}
-                self.extender.update_toolbar()
+            rows = self.extender.gridTable.getSelectedRows()
+            if rows:
+                nodes = [self.extender.table_model.row_nodes[r] for r in rows if r < len(self.extender.table_model.row_nodes)]
+                self.extender.selected_nodes = set(nodes)
+            else:
+                self.extender.selected_nodes = set()
+            self.extender.update_toolbar()
         self.extender.gridTable.getSelectionModel().addListSelectionListener(row_selected)
 
         def grid_key_pressed(e):
@@ -2585,6 +2886,14 @@ class UIBuilder(Runnable):
                 self.extender.populate_grid()
         delRowBtn.addActionListener(del_row_action)
         grid_toolbar.add(delRowBtn)
+
+        grid_toolbar.add(Box.createHorizontalStrut(15))
+        grid_toolbar.add(JLabel("Filter Method: "))
+        self.extender.grid_method_filter = style_textfield(JTextField("", 10), BURP_ORANGE)
+        def trigger_grid_filter(e):
+            self.extender.populate_grid()
+        self.extender.grid_method_filter.addKeyListener(type("FilterKey", (KeyAdapter,), {"keyReleased": lambda s, e: trigger_grid_filter(e)})())
+        grid_toolbar.add(self.extender.grid_method_filter)
 
         grid_wrapper.add(grid_toolbar, BorderLayout.NORTH)
 
@@ -2661,14 +2970,13 @@ class UIBuilder(Runnable):
         self.extender.features_master_table.setFillsViewportHeight(True)
 
         feat_name_col = self.extender.features_master_table.getColumnModel().getColumn(0)
-        feat_name_col.setMinWidth(100)
-        feat_name_col.setMaxWidth(150)
-        feat_name_col.setPreferredWidth(120)
+        feat_name_col.setPreferredWidth(180)
 
+        feat_reqs_col = self.extender.features_master_table.getColumnModel().getColumn(1)
+        feat_reqs_col.setMaxWidth(40)
+        
         feat_tested_col = self.extender.features_master_table.getColumnModel().getColumn(2)
-        feat_tested_col.setMinWidth(50)
-        feat_tested_col.setMaxWidth(60)
-        feat_tested_col.setPreferredWidth(55)
+        feat_tested_col.setMaxWidth(50)
 
         self.extender.feature_note_area = JTextArea()
         self.extender.feature_note_area.setLineWrap(True)
@@ -2726,10 +3034,11 @@ class UIBuilder(Runnable):
         self.extender.features_reqs_table = JTable(self.extender.features_reqs_model)
         self.extender.features_reqs_table.setFillsViewportHeight(True)
 
-        method_col = self.extender.features_reqs_table.getColumnModel().getColumn(0)
-        method_col.setMinWidth(65)
-        method_col.setMaxWidth(85)
-        method_col.setPreferredWidth(70)
+        reqs_method_col = self.extender.features_reqs_table.getColumnModel().getColumn(0)
+        reqs_method_col.setMaxWidth(65)
+        
+        reqs_notes_col = self.extender.features_reqs_table.getColumnModel().getColumn(2)
+        reqs_notes_col.setPreferredWidth(350)
 
         def feat_req_selected(e):
             if e.getValueIsAdjusting(): return
@@ -2869,21 +3178,15 @@ class UIBuilder(Runnable):
 
         self.extender.request_panel.add(title_panel, BorderLayout.NORTH)
 
-        self.extender.request_text = JTextArea()
-        self.extender.request_text.setFont(Font("Monospaced", Font.PLAIN, 11))
+        self.extender.request_text = JTextPane()
         self.extender.request_text.setEditable(False)
-        self.extender.request_text.setLineWrap(True) 
         self.extender.request_text.setBackground(UIManager.getColor("TextArea.background") or Color(43, 43, 43))
-        self.extender.request_text.setForeground(UIManager.getColor("TextArea.foreground") or Color.WHITE)
         req_scroll = JScrollPane(self.extender.request_text)
         req_scroll.setBorder(BorderFactory.createTitledBorder("Request"))
 
-        self.extender.response_text = JTextArea()
-        self.extender.response_text.setFont(Font("Monospaced", Font.PLAIN, 11))
+        self.extender.response_text = JTextPane()
         self.extender.response_text.setEditable(False)
-        self.extender.response_text.setLineWrap(True)
         self.extender.response_text.setBackground(UIManager.getColor("TextArea.background") or Color(43, 43, 43))
-        self.extender.response_text.setForeground(UIManager.getColor("TextArea.foreground") or Color.WHITE)
         res_scroll = JScrollPane(self.extender.response_text)
         res_scroll.setBorder(BorderFactory.createTitledBorder("Response"))
 
@@ -2896,7 +3199,7 @@ class UIBuilder(Runnable):
         self.extender.request_panel.setVisible(False)
 
         self.extender.outer_split_pane = JSplitPane(JSplitPane.VERTICAL_SPLIT, self.extender.split_pane, self.extender.request_panel)
-        self.extender.outer_split_pane.setResizeWeight(0.7)
+        self.extender.outer_split_pane.setResizeWeight(0.40)
         self.extender.outer_split_pane.setContinuousLayout(True)
         self.extender.outer_split_pane.setBorder(BorderFactory.createEmptyBorder())
 
