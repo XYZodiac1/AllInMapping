@@ -47,7 +47,7 @@ class MindMapNode:
         self.height = 44  
         self.subtree_height = 0
         self.subtree_width = 0
-        
+
         self.methods = set()
         self.statuses = set()
         self.content_lengths = set()
@@ -57,7 +57,7 @@ class MindMapNode:
         self.status = "" 
         self.params = set()
         self.collapsed = False 
-        
+
         self.is_playbook_node = False
         self.is_manual = False 
         self.manual_resize = False 
@@ -69,18 +69,18 @@ class MindMapNode:
             if child.text == text:
                 return child
         return None
-        
+
     def get_full_url(self):
         parts = []
         current = self
-        
+
         while current is not None:
             if current.text:
                 parts.insert(0, current.text)
             current = current.parent
-            
+
         if not parts: return ""
-            
+
         base = parts[0]
         if not base.startswith("http"):
             base = "https://" + base
@@ -90,7 +90,7 @@ class MindMapNode:
             path = "/".join(filter(None, path.split("/"))) 
             if base.endswith("/"): base = base[:-1]
             return base + "/" + path
-            
+
         return base
 
 class MindMapTableModel(DefaultTableModel):
@@ -99,23 +99,23 @@ class MindMapTableModel(DefaultTableModel):
         self.base_cols = ["URL", "Endpoint", "Tested", "Note"]
         self.row_nodes = []
         DefaultTableModel.__init__(self, 0, len(self.base_cols) + len(self.extender.custom_columns))
-        
+
     def getColumnCount(self):
         if not hasattr(self, 'extender'): return 3
         return len(self.base_cols) + len(self.extender.custom_columns)
-        
+
     def getColumnName(self, col):
         if col < len(self.base_cols):
             return self.base_cols[col]
         return self.extender.custom_columns[col - len(self.base_cols)]
-        
+
     def getColumnClass(self, col):
         if col == 2: return Boolean
         return String
-        
+
     def isCellEditable(self, row, col):
         return col >= 2 
-        
+
     def getValueAt(self, row, col):
         if row >= len(self.row_nodes): return ""
         node = self.row_nodes[row]
@@ -163,20 +163,33 @@ class MindMapTableModel(DefaultTableModel):
 class FeaturesMasterTableModel(DefaultTableModel):
     def __init__(self, extender):
         self.extender = extender
-        DefaultTableModel.__init__(self, ["Feature Name", "Reqs"], 0)
-        
+        DefaultTableModel.__init__(self, ["Feature Name", "Reqs", "Tested"], 0)
+
+    def getColumnClass(self, col):
+        if col == 2: return Boolean
+        return String
+
     def isCellEditable(self, row, col):
-        return False
+        return col == 2
+
+    def setValueAt(self, val, row, col):
+        if col == 2:
+            feat = self.extender.visible_features[row]
+            feat["tested"] = bool(val)
+            self.extender.save_state()
+            if getattr(self.extender, 'hide_tested', False):
+                SwingUtilities.invokeLater(lambda: self.extender.update_features_master_table())
+        DefaultTableModel.setValueAt(self, val, row, col)
 
 class FeatureReqsTableModel(DefaultTableModel):
     def __init__(self, extender):
         self.extender = extender
         self.current_feature = None
         DefaultTableModel.__init__(self, ["Method", "URL", "Notes"], 0)
-        
+
     def isCellEditable(self, row, col):
         return col == 2
-        
+
     def setValueAt(self, val, row, col):
         if col == 2 and self.current_feature:
             self.current_feature["requests"][row]["notes"] = unicode(val) if val else u""
@@ -262,17 +275,17 @@ class AddChildNodeAction(AbstractAction):
 class GridMouseHandler(MouseAdapter):
     def __init__(self, extender):
         self.extender = extender
-        
+
     def mousePressed(self, e): self.check_popup(e)
     def mouseReleased(self, e): self.check_popup(e)
-        
+
     def mouseClicked(self, e):
         row = self.extender.gridTable.rowAtPoint(e.getPoint())
         if row == -1: 
             self.extender.gridTable.clearSelection()
             self.extender.selected_nodes = set()
             self.extender.update_toolbar()
-            
+
     def check_popup(self, e):
         if e.isPopupTrigger() or SwingUtilities.isRightMouseButton(e):
             row = self.extender.gridTable.rowAtPoint(e.getPoint())
@@ -293,7 +306,7 @@ class MapMouseHandler(MouseAdapter):
         self.logical_last_y = 0
         self.has_dragged = False
         self.pre_action_state = None
-        
+
         self.panning = False
         self.pan_start_x = 0
         self.pan_start_y = 0
@@ -336,13 +349,13 @@ class MapMouseHandler(MouseAdapter):
     def mouseMoved(self, e):
         if getattr(self.extender, 'is_relating', False): return
         lx, ly = self.get_logical_coords(e)
-        
+
         toggle_node = self.extender.get_toggle_at(lx, ly)
         if toggle_node:
             self.extender.map_label.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR))
             self.extender.map_label.setToolTipText("Click to expand/collapse")
             return
-            
+
         node = self.extender.get_node_at(lx, ly)
         if node and lx >= node.x + node.width - 15 and ly >= node.y + node.height - 15:
             self.extender.map_label.setCursor(Cursor.getPredefinedCursor(Cursor.SE_RESIZE_CURSOR))
@@ -363,16 +376,16 @@ class MapMouseHandler(MouseAdapter):
         if self.check_popup(e): return
 
         lx, ly = self.get_logical_coords(e)
-        
+
         toggle_node = self.extender.get_toggle_at(lx, ly)
         if toggle_node and SwingUtilities.isLeftMouseButton(e):
             self.extender.save_state()
             toggle_node.collapsed = not getattr(toggle_node, 'collapsed', False)
             self.extender.auto_arrange(None)
             return
-            
+
         node = self.extender.get_node_at(lx, ly)
-        
+
         if getattr(self.extender, 'is_relating', False):
             if node:
                 if not getattr(self.extender, 'relate_source', None):
@@ -392,19 +405,19 @@ class MapMouseHandler(MouseAdapter):
         self.logical_last_x = lx
         self.logical_last_y = ly
         self.has_dragged = False
-        
+
         if self.extender.activeRoot:
             self.pre_action_state = self.extender.get_full_state()
 
         is_multi = e.isControlDown() or e.isShiftDown() or e.isMetaDown()
-        
+
         if node:
             self.extender.selected_relation = None
             if lx >= node.x + node.width - 15 and ly >= node.y + node.height - 15:
                 self.resizing_node = node
             else:
                 self.dragged_node = node
-                
+
             if is_multi:
                 if node in self.extender.selected_nodes:
                     self.extender.selected_nodes.remove(node)
@@ -420,7 +433,7 @@ class MapMouseHandler(MouseAdapter):
                 if stroke.createStrokedShape(path).contains(lx, ly):
                     clicked_rel = rel
                     break
-                    
+
             if clicked_rel:
                 self.extender.selected_relation = clicked_rel
                 self.extender.selected_nodes = set()
@@ -434,13 +447,13 @@ class MapMouseHandler(MouseAdapter):
                 self.start_scroll_x = self.extender.canvasScroll.getHorizontalScrollBar().getValue()
                 self.start_scroll_y = self.extender.canvasScroll.getVerticalScrollBar().getValue()
                 self.extender.map_label.setCursor(Cursor.getPredefinedCursor(Cursor.MOVE_CURSOR))
-            
+
         self.extender.update_toolbar()
         self.extender.render_map() 
 
     def mouseDragged(self, e):
         if getattr(self.extender, 'is_relating', False): return
-        
+
         if self.panning:
             dx = e.getXOnScreen() - self.pan_start_x
             dy = e.getYOnScreen() - self.pan_start_y
@@ -454,7 +467,7 @@ class MapMouseHandler(MouseAdapter):
         dy = ly - self.logical_last_y
         self.logical_last_x = lx
         self.logical_last_y = ly
-        
+
         if self.resizing_node:
             self.resizing_node.width = max(50, self.resizing_node.width + dx) 
             self.resizing_node.height = max(28, self.resizing_node.height + dy) 
@@ -472,11 +485,11 @@ class MapMouseHandler(MouseAdapter):
 
     def mouseReleased(self, e):
         if getattr(self.extender, 'is_relating', False): return
-        
+
         self.check_popup(e)
         self.panning = False
         self.extender.map_label.setCursor(Cursor.getDefaultCursor())
-        
+
         if self.has_dragged and (self.dragged_node or self.resizing_node) and self.pre_action_state:
             self.extender.undo_stack.append(self.pre_action_state)
             if len(self.extender.undo_stack) > 10:
@@ -492,10 +505,10 @@ class MapMouseHandler(MouseAdapter):
 
     def mouseClicked(self, e):
         if getattr(self.extender, 'is_relating', False): return
-        
+
         lx, ly = self.get_logical_coords(e)
         if self.extender.get_toggle_at(lx, ly): return
-            
+
         if e.getClickCount() == 2 and not SwingUtilities.isRightMouseButton(e):
             node = self.extender.get_node_at(lx, ly)
             if node: self.extender.trigger_inline_edit(node)
@@ -505,45 +518,46 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
         self.callbacks = callbacks
         self.helpers = callbacks.getHelpers()
         callbacks.setExtensionName("Interactive Attack Surface MindMap")
-        
+
         self.copied_burp_request = None
         self.target_roots = {} 
         self.activeRoot = None
-        
+
         self.selected_nodes = set() 
         self.selected_relation = None
         self.zoom_factor = 1.0 
         self.relation_paths = {}
-        
+
         self.is_vertical_layout = False
         self.current_theme = "Vibrant"
-        
+
         self.relationships = []
         self.is_relating = False
         self.relate_source = None
         self.hide_tested = False
-        
+
         self.custom_columns = []
         self.features = [] 
+        self.visible_features = []
         self.is_recording_feature = False
         self.recorded_reqs = []
         self.selected_feature_req = None 
         self.current_view_mode = "map"
-        
+
         self.internal_clipboard = []
         self.last_copied_text = ""
-        
+
         self.undo_stack = []
         self.redo_stack = []
-        
+
         self.live_processed_urls = set()
         self.unloaded = False 
-        
+
         self.callbacks.registerHttpListener(self)
         self.callbacks.registerContextMenuFactory(self)
         self.callbacks.registerExtensionStateListener(self)
         SwingUtilities.invokeLater(UIBuilder(self))
-        
+
         def auto_save_loop():
             while not self.unloaded:
                 for _ in range(300): 
@@ -551,7 +565,7 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
                     time.sleep(1)
                 if not self.unloaded and self.activeRoot:
                     self.save_project_state(silent=True)
-                    
+
         t = threading.Thread(target=auto_save_loop)
         t.daemon = True 
         t.start()
@@ -563,12 +577,12 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
     def trigger_inline_edit(self, node):
         self.editing_node = node
         self.inline_edit_field.setText(node.text)
-        
+
         zx = int(node.x * self.zoom_factor)
         zy = int(node.y * self.zoom_factor)
         zw = int(node.width * self.zoom_factor)
         zh = int(node.height * self.zoom_factor) 
-        
+
         self.inline_edit_field.setBounds(zx, zy, zw, zh)
         self.inline_edit_field.setFont(Font("Hack", Font.PLAIN, int(12 * self.zoom_factor)))
         self.inline_edit_field.setVisible(True)
@@ -578,7 +592,7 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
     def commit_inline_edit(self, e=None):
         if not hasattr(self, 'inline_edit_field') or not self.inline_edit_field.isVisible() or not getattr(self, 'editing_node', None): 
             return
-            
+
         new_text = self.inline_edit_field.getText().strip()
         if new_text:
             self.save_state()
@@ -588,7 +602,7 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
                 self.editing_node.parent.children.remove(self.editing_node)
                 if self.editing_node in self.selected_nodes:
                     self.selected_nodes.remove(self.editing_node)
-        
+
         self.inline_edit_field.setVisible(False)
         self.editing_node = None
         self.auto_arrange(None)
@@ -618,14 +632,14 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
         if len(self.selected_nodes) != 1: return
         parent = list(self.selected_nodes)[0]
         self.save_state()
-        
+
         clipboard_text = ""
         try:
             clip = Toolkit.getDefaultToolkit().getSystemClipboard().getContents(None)
             if clip and clip.isDataFlavorSupported(DataFlavor.stringFlavor):
                 clipboard_text = clip.getTransferData(DataFlavor.stringFlavor)
         except: pass
-            
+
         if clipboard_text == self.last_copied_text and self.internal_clipboard:
             for node_data in self.internal_clipboard:
                 new_node = self.deserialize_node(node_data, parent)
@@ -637,7 +651,7 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
                 new_node.is_manual = True
                 new_node.width = 70
                 parent.children.append(new_node)
-                
+
         parent.collapsed = False
         self.auto_arrange(None)
 
@@ -648,19 +662,19 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
         if chooser.showSaveDialog(self.mainPanel) == JFileChooser.APPROVE_OPTION:
             filepath = chooser.getSelectedFile().getAbsolutePath()
             if not filepath.endswith(".xls"): filepath += ".xls"
-            
+
             excluded_exts = (
                 '.gif', '.png', '.jpg', '.jpeg', '.svg', '.mp4', '.mp3', 
                 '.ico', '.js', '.min.js', '.js.min', '.wav', '.mov', 
                 '.ttf', '.woff', '.woff2', '.eot', '.otf', '.css', '.map'
             )
-            
+
             try:
                 xml_data = []
                 xml_data.append('<?xml version="1.0"?>')
                 xml_data.append('<?mso-application progid="Excel.Sheet"?>')
                 xml_data.append('<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">')
-                
+
                 xml_data.append(""" <Styles>
   <Style ss:ID="HeaderL">
    <Font ss:Bold="1"/>
@@ -756,20 +770,20 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
                     sheet_name = host.replace("/", "").replace("\\", "").replace("?", "").replace("*", "").replace(":", "").replace("[", "").replace("]", "")
                     if len(sheet_name) > 31: sheet_name = sheet_name[:31]
                     if not sheet_name: sheet_name = "Unknown"
-                    
+
                     xml_data.append(' <Worksheet ss:Name="{}">'.format(sheet_name))
                     xml_data.append('  <Table>')
-                    
+
                     xml_data.append('   <Column ss:Width="432"/>') 
                     xml_data.append('   <Column ss:Width="80"/>')  
-                    
+
                     xml_data.append('   <Row>')
                     xml_data.append('    <Cell ss:StyleID="HeaderL"><Data ss:Type="String">URL</Data></Cell>')
                     xml_data.append('    <Cell ss:StyleID="HeaderR"><Data ss:Type="String">Tested</Data></Cell>')
                     xml_data.append('   </Row>')
-                    
+
                     rows_data = []
-                    
+
                     def traverse_excel(node):
                         has_http = (len(node.statuses) > 0) or (node.linked_request is not None) or (len(node.methods) > 0)
                         if node != root and not getattr(node, 'is_manual', False) and has_http:
@@ -780,17 +794,17 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
                                 if not endpoint: endpoint = "/"
                             except:
                                 endpoint = node.text
-                            
+
                             if not any(endpoint.lower().endswith(ext) for ext in excluded_exts):
                                 is_tested = True if node.status == "Tested" else False
                                 ep_clean = endpoint.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
                                 rows_data.append((ep_clean, is_tested))
-                            
+
                         for child in node.children:
                             traverse_excel(child)
-                            
+
                     traverse_excel(root)
-                    
+
                     for idx, (ep_clean, is_tested) in enumerate(rows_data):
                         is_last = (idx == len(rows_data) - 1)
                         if is_last:
@@ -799,21 +813,21 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
                         else:
                             style_L = "TestL" if is_tested else "NormL"
                             style_R = "TestR" if is_tested else "NormR"
-                            
+
                         tested_str = "Yes" if is_tested else "No"
-                            
+
                         xml_data.append('   <Row>')
                         xml_data.append('    <Cell ss:StyleID="{}"><Data ss:Type="String">{}</Data></Cell>'.format(style_L, ep_clean))
                         xml_data.append('    <Cell ss:StyleID="{}"><Data ss:Type="String">{}</Data></Cell>'.format(style_R, tested_str))
                         xml_data.append('   </Row>')
-                    
+
                     xml_data.append('  </Table>')
                     xml_data.append(' </Worksheet>')
                 xml_data.append('</Workbook>')
-                
+
                 with open(filepath, 'w') as f:
                     f.write("\n".join(xml_data).encode("utf-8"))
-                    
+
                 JOptionPane.showMessageDialog(self.mainPanel, "Excel Exported successfully!")
             except Exception as e:
                 self.callbacks.printError("Failed to export Excel: " + str(e))
@@ -919,57 +933,57 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
 
         if node == self.activeRoot:
             return True
-            
+
         has_param_filter = hasattr(self, 'param_only_cb') and self.param_only_cb.isSelected()
         has_hide_get_filter = hasattr(self, 'hide_get_cb') and self.hide_get_cb.isSelected()
-        
+
         hide_cls = set()
         if hasattr(self, 'cl_filter_field'):
             raw_cl = self.cl_filter_field.getText().strip()
             if raw_cl:
                 try: hide_cls = set([int(x.strip()) for x in raw_cl.split(",") if x.strip().isdigit()])
                 except: pass
-                
+
         hide_statuses = self.get_hidden_statuses()
-        
+
         ext_excludes = []
         ext_includes = []
         if hasattr(self, 'filterField'):
             raw_ex = self.filterField.getText().strip().lower()
             ext_excludes = [x.strip() for x in raw_ex.split(',') if x.strip()]
-            
+
             raw_inc = self.includeField.getText().strip().lower()
             ext_includes = [x.strip() for x in raw_inc.split(',') if x.strip()]
-        
+
         def check_node_or_descendants(n):
             if getattr(self, 'hide_tested', False) and n.status == "Tested":
                 return False
 
             if getattr(n, 'is_manual', False) or getattr(n, 'is_playbook_node', False) or n.note or n.custom_color or n.status:
                 return True
-                
+
             has_http_data = bool(n.methods or n.statuses or n.params)
-            
+
             passes_filters = True
             if has_http_data:
                 if has_param_filter and not n.params: passes_filters = False
                 if has_hide_get_filter and (not n.methods or all(m == "GET" for m in n.methods)): passes_filters = False
                 if hide_cls and n.content_lengths and all(cl in hide_cls for cl in n.content_lengths): passes_filters = False
                 if hide_statuses and n.statuses and all(s in hide_statuses for s in n.statuses): passes_filters = False
-                
+
                 txt = n.text.lower()
                 if ext_excludes and any(txt.endswith(ext) for ext in ext_excludes): passes_filters = False
                 if ext_includes and "." in txt and not any(txt.endswith(ext) for ext in ext_includes): passes_filters = False
             else:
                 passes_filters = False 
-                
+
             if passes_filters: return True
-            
+
             for child in n.children:
                 if check_node_or_descendants(child):
                     return True
             return False
-            
+
         return check_node_or_descendants(node)
 
     def find_node_by_id(self, current_node, search_id):
@@ -994,42 +1008,42 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
     def handle_global_send_to_map(self, reqRes):
         if getattr(self, 'is_prompting', False): return 
         self.is_prompting = True
-        
+
         try:
             info = self.helpers.analyzeRequest(reqRes)
             url_obj = info.getUrl()
             host = url_obj.getHost()
-            
+
             if host not in self.target_roots:
                 self.add_target_tab(host)
-                
+
             target_root = self.target_roots[host]
-                
+
             node_title = JOptionPane.showInputDialog(self.mainPanel, "Enter a title for this Attack Box:", "Test for XYZ attack")
             if not node_title or not node_title.strip():
                 return
-                
+
             self.save_state()
-            
+
             new_node = MindMapNode(node_title.strip(), parent=target_root)
             new_node.is_playbook_node = True
             new_node.linked_request = self.callbacks.saveBuffersToTempFiles(reqRes) 
-            
+
             dummy_label = JLabel()
             fm = dummy_label.getFontMetrics(dummy_label.getFont())
             new_node.width = max(90, fm.stringWidth(new_node.text) + 24)
             new_node.custom_color = Color(0, 127, 255, 51)
-            
+
             target_root.children.append(new_node)
             self.selected_nodes = {new_node}
-            
+
             if self.activeRoot != target_root:
                 for i in range(self.tabbed_pane.getTabCount()):
                     panel = self.tabbed_pane.getComponentAt(i)
                     if panel.getClientProperty("target_root") == target_root:
                         self.tabbed_pane.setSelectedIndex(i)
                         break
-            
+
             self.auto_arrange(None)
         finally:
             SwingUtilities.invokeLater(lambda: setattr(self, 'is_prompting', False))
@@ -1058,7 +1072,7 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
 
     def processHttpMessage(self, toolFlag, messageIsRequest, messageInfo):
         if messageIsRequest: return
-        
+
         if self.is_recording_feature and toolFlag == self.callbacks.TOOL_PROXY:
             info = self.helpers.analyzeRequest(messageInfo)
             if info and info.getUrl() and self.callbacks.isInScope(info.getUrl()):
@@ -1074,7 +1088,7 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
                 })
                 if hasattr(self, 'features_reqs_model') and self.features_reqs_model.current_feature is None:
                     SwingUtilities.invokeLater(lambda: self.update_features_detail_table())
-        
+
         if toolFlag not in [self.callbacks.TOOL_PROXY, self.callbacks.TOOL_REPEATER]: return
         if not hasattr(self, 'live_sync_cb') or not self.live_sync_cb.isSelected(): return
         SwingUtilities.invokeLater(lambda: self.process_live_request(messageInfo, toolFlag))
@@ -1082,43 +1096,43 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
     def process_live_request(self, reqRes, toolFlag, bypass_live_sync_check=False):
         info = self.helpers.analyzeRequest(reqRes)
         if not info or not info.getUrl(): return
-        
+
         response = reqRes.getResponse()
         if not response or len(response) == 0: return 
-        
+
         resp_info = self.helpers.analyzeResponse(response)
         status_code = resp_info.getStatusCode()
-        
+
         if status_code in self.get_hidden_statuses(): return 
-        
+
         url_obj = info.getUrl()
         url_str_full = unicode(url_obj)
-        
+
         if not bypass_live_sync_check:
             if url_str_full in self.live_processed_urls and toolFlag != self.callbacks.TOOL_REPEATER: return
             self.live_processed_urls.add(url_str_full)
-        
+
         matched_target = url_obj.getHost()
-        
+
         if matched_target not in self.target_roots:
             if self.callbacks.isInScope(url_obj):
                 self.add_target_tab(matched_target)
             else:
                 return 
-                
+
         targetRoot = self.target_roots[matched_target]
         cl = self.get_content_length(response)
         method = info.getMethod()
-        
+
         params = set()
         for p in info.getParameters():
             if p.getType() == 0: 
                 params.add(p.getName())
-        
+
         path = url_obj.getPath()
         current_node = targetRoot
         is_new_data = False
-        
+
         if path and path != "/":
             parts = path.split("/")
             for part in parts:
@@ -1129,32 +1143,32 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
                     current_node.children.append(next_node)
                     is_new_data = True
                 current_node = next_node
-            
+
         before_m = len(current_node.methods)
         current_node.methods.add(method)
         if len(current_node.methods) > before_m: is_new_data = True
-        
+
         if status_code:
             before_s = len(current_node.statuses)
             current_node.statuses.add(status_code)
             if len(current_node.statuses) > before_s: is_new_data = True
-            
+
         if cl is not None:
             before_cl = len(current_node.content_lengths)
             current_node.content_lengths.add(cl)
             if len(current_node.content_lengths) > before_cl: is_new_data = True
-            
+
         before_p = len(current_node.params)
         current_node.params.update(params)
         if len(current_node.params) > before_p: is_new_data = True
-        
+
         current_node.linked_request = self.callbacks.saveBuffersToTempFiles(reqRes)
-        
+
         if toolFlag == self.callbacks.TOOL_REPEATER:
             if current_node.status != "Tested":
                 current_node.status = "Tested"
                 is_new_data = True
-        
+
         if is_new_data and targetRoot == self.activeRoot:
             self.auto_arrange(None)
 
@@ -1178,23 +1192,23 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
         self.activeRoot = None
         self.custom_columns = state.get("custom_columns", [])
         self.features = state.get("features", [])
-        
+
         if hasattr(self, 'table_model'):
             self.table_model.setColumnCount(0)
             for c in self.table_model.base_cols + self.custom_columns:
                 self.table_model.addColumn(c)
-                
+
         for host, root_data in state.get("targets", {}).items():
             root_node = self.deserialize_node(root_data, None)
             self.add_target_tab(host, root_node)
-            
+
         self.relationships = state.get("relationships", [])
         self.selected_nodes = set()
         self.update_toolbar()
-        
+
         if hasattr(self, 'features_master_model'):
             self.update_features_master_table()
-            
+
         if self.activeRoot:
             self.auto_arrange(None)
 
@@ -1235,7 +1249,7 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
         if not self.activeRoot: return None
         def search(node):
             if node != self.activeRoot and not self.should_show(node): return None
-            
+
             has_visible_children = len([c for c in node.children if self.should_show(c)]) > 0
             if has_visible_children:
                 if self.is_vertical_layout:
@@ -1244,24 +1258,24 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
                 else:
                     bx = node.x + node.width
                     by = node.y + 22
-                
+
                 if (bx - 7) <= lx <= (bx + 7) and (by - 7) <= ly <= (by + 7):
                     return node
-            
+
             if getattr(node, 'collapsed', False): return None
-            
+
             for child in node.children:
                 res = search(child)
                 if res: return res
             return None
-            
+
         return search(self.activeRoot)
 
     def update_toolbar(self):
         has_selection = len(self.selected_nodes) > 0
         if hasattr(self, 'color_bar') and self.color_bar.isVisible() != has_selection:
             self.color_bar.setVisible(has_selection)
-            
+
         if hasattr(self, 'request_panel'):
             req_str = ""
             res_str = ""
@@ -1270,7 +1284,7 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
             if len(self.selected_nodes) == 1 and getattr(self, 'current_view_mode', 'map') != 'features':
                 node = list(self.selected_nodes)[0]
                 has_http_data = (len(node.statuses) > 0) or (node.linked_request is not None) or (len(node.methods) > 0)
-                
+
                 if not getattr(node, 'is_manual', False) and has_http_data:
                     if node.linked_request:
                         req_bytes = node.linked_request.getRequest()
@@ -1288,7 +1302,7 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
                         if req: 
                             req_str = self.helpers.bytesToString(req).replace('\r\n', '\n')
                             res_str = "[Preview not available - No linked request]"
-            
+
             elif getattr(self, 'current_view_mode', 'map') == 'features' and getattr(self, 'selected_feature_req', None):
                 f_req = self.selected_feature_req
                 if f_req.get("req_b64"):
@@ -1297,7 +1311,7 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
                 if f_req.get("res_b64"):
                     res_bytes = self.helpers.base64Decode(f_req["res_b64"])
                     res_str = self.helpers.bytesToString(res_bytes).replace('\x00', '').replace('\r\n', '\n')
-            
+
             if req_str or res_str:
                 self.request_text.setText(req_str)
                 self.request_text.setCaretPosition(0)
@@ -1310,7 +1324,7 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
                         SwingUtilities.invokeLater(lambda: self.traffic_split.setDividerLocation(0.5))
             else:
                 self.request_panel.setVisible(False)
-                
+
         self.mainPanel.revalidate()
         self.mainPanel.repaint()
 
@@ -1328,7 +1342,7 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
         menu = JPopupMenu()
         sel_count = len(self.selected_nodes)
         suffix = " (" + str(sel_count) + " Selected)" if sel_count > 1 else ""
-        
+
         status_menu = JMenu("Set Testing Status" + suffix)
         st_none = JMenuItem("Not Started (Clear)")
         st_none.addActionListener(lambda e: self.set_node_status(""))
@@ -1342,7 +1356,7 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
         st_vuln = JMenuItem("Vulnerable") 
         st_vuln.addActionListener(lambda e: self.set_node_status("Vulnerable"))
         status_menu.add(st_vuln)
-        
+
         menu.add(status_menu)
         menu.addSeparator()
         copy_item = JMenuItem("Copy URL(s)" + suffix)
@@ -1366,11 +1380,11 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
         add_item = JMenuItem("Add Child Box")
         add_item.addActionListener(lambda e: self.add_custom_node(node))
         menu.add(add_item)
-        
+
         collapse_item = JMenuItem("Toggle Hide/Show Children")
         collapse_item.addActionListener(lambda e: self.toggle_collapse(node))
         menu.add(collapse_item)
-        
+
         del_item = JMenuItem("Delete Box(es)" + suffix)
         del_item.addActionListener(lambda e: self.delete_nodes(node))
         menu.add(del_item)
@@ -1466,7 +1480,7 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
     def delete_nodes(self, target_node):
         self.save_state() 
         nodes_to_delete = list(self.selected_nodes) if target_node in self.selected_nodes else [target_node]
-        
+
         if self.activeRoot in nodes_to_delete:
             JOptionPane.showMessageDialog(self.mainPanel, "You cannot delete the Workspace Root.")
             nodes_to_delete.remove(self.activeRoot)
@@ -1478,15 +1492,15 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
                     return True
                 if remove_recursive(child, target): return True
             return False
-            
+
         for n in nodes_to_delete:
             for root in self.target_roots.values():
                 remove_recursive(root, n)
             if n in self.selected_nodes: self.selected_nodes.remove(n)
-                
+
         deleted_ids = [n.id for n in nodes_to_delete]
         self.relationships = [r for r in self.relationships if r[0] not in deleted_ids and r[1] not in deleted_ids]
-        
+
         self.update_toolbar()
         self.auto_arrange(None)
 
@@ -1506,14 +1520,14 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
         req_b64 = ""
         res_b64 = ""
         svc_data = None
-        
+
         if node.linked_request:
             req = node.linked_request.getRequest()
             if req: req_b64 = self.helpers.bytesToString(self.helpers.base64Encode(req))
-            
+
             res = node.linked_request.getResponse()
             if res: res_b64 = self.helpers.bytesToString(self.helpers.base64Encode(res))
-            
+
             svc = node.linked_request.getHttpService()
             if svc:
                 svc_data = {
@@ -1554,28 +1568,28 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
         node.severity = data.get("severity", None)
         node.note = data.get("note", "")
         node.custom_color = self.deserialize_color(data.get("custom_color", None))
-        
+
         node.status = data.get("status", "")
         node.params = set(data.get("params", []))
         node.collapsed = data.get("collapsed", False) 
         node.is_manual = data.get("is_manual", False) 
         node.manual_resize = data.get("manual_resize", False)
         node.custom_cols = data.get("custom_cols", {})
-        
+
         req_b64 = data.get("req_b64", "")
         res_b64 = data.get("res_b64", "")
         svc_data = data.get("svc_data", None)
-        
+
         if req_b64 or res_b64:
             req_bytes = self.helpers.base64Decode(req_b64) if req_b64 else None
             res_bytes = self.helpers.base64Decode(res_b64) if res_b64 else None
-            
+
             svc = None
             if svc_data:
                 svc = RestoredHttpService(svc_data["host"], svc_data["port"], svc_data["protocol"])
-                
+
             node.linked_request = RestoredReqRes(req_bytes, res_bytes, svc)
-        
+
         for child_data in data.get("children", []):
             node.children.append(self.deserialize_node(child_data, node))
         return node
@@ -1587,7 +1601,7 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
             file = chooser.getSelectedFile()
             filepath = file.getAbsolutePath()
             if not filepath.endswith(".svg"): filepath += ".svg"
-            
+
             try:
                 svg_data = self.generate_svg_xml()
                 with open(filepath, 'w') as f:
@@ -1606,19 +1620,19 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
                 if cmx > mx: mx = cmx
                 if cmy > my: my = cmy
             return mx, my
-            
+
         mx, my = find_max_bounds(self.activeRoot)
         width, height = int(mx + 300), int(my + 300)
-        
+
         lines = []
         lines.append('<?xml version="1.0" encoding="UTF-8"?>')
         lines.append('<svg xmlns="http://www.w3.org/2000/svg" width="{}" height="{}" viewBox="-50 -50 {} {}" style="background-color:#3c3f41; font-family:sans-serif;">'.format(width, height, width+100, height+100))
-        
+
         def draw_connections(node):
             if not self.should_show(node) or getattr(node, 'collapsed', False): return
             if self.is_vertical_layout: px, py = node.x + node.width / 2.0, node.y + node.height
             else: px, py = node.x + node.width, node.y + 22
-                
+
             for child in node.children:
                 if not self.should_show(child): continue
                 if self.is_vertical_layout:
@@ -1629,9 +1643,9 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
                     cx1, cy1, cx2, cy2 = px + (cx - px)/2.0, py, px + (cx - px)/2.0, cy
                 lines.append('<path d="M {},{} C {},{} {},{} {},{}" fill="none" stroke="#777777" stroke-width="1.5"/>'.format(px, py, cx1, cy1, cx2, cy2, cx, cy))
                 draw_connections(child)
-                
+
         draw_connections(self.activeRoot)
-        
+
         for src_id, tgt_id in self.relationships:
             src = self.find_node_by_id(self.activeRoot, src_id)
             tgt = self.find_node_by_id(self.activeRoot, tgt_id)
@@ -1641,7 +1655,7 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
                 ctrl_x1 = sx + 60
                 ctrl_x2 = tx - 60
                 lines.append('<path d="M {},{} C {},{} {},{} {},{}" fill="none" stroke="#ffffff" stroke-width="2.5" stroke-dasharray="8,8"/>'.format(sx, sy, ctrl_x1, sy, ctrl_x2, ty, tx, ty))
-        
+
         def draw_nodes(node, level):
             if not self.should_show(node): return
             bg = "#2a2c2e"
@@ -1649,7 +1663,7 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
                 c = node.custom_color
                 bg = "rgba({},{},{},{})".format(c.getRed(), c.getGreen(), c.getBlue(), c.getAlpha()/255.0)
             elif level == 0: bg = "gray"
-            
+
             bc = "#e56a25" 
             if self.current_theme == "Light": 
                 dracula_hex = ["#bd93f9", "#50fa7b", "#8be9fd", "#ff79c6", "#f1fa8c", "#ffb86c"]
@@ -1660,15 +1674,15 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
             elif self.current_theme == "Vibrant": 
                 Vibrant_hex = ["#ffffff", "#00e5ff", "#ff2a2a", "#00ffc3", "#d500ff", "#adff00"]
                 bc = Vibrant_hex[level % len(Vibrant_hex)]
-                
+
             if node.status == "Vulnerable": bc = "red"
             elif node.status == "Tested": bc = "green"
             elif node.status == "In Progress": bc = "yellow"
-            
+
             if getattr(node, 'collapsed', False): return 
             for child in node.children:
                 draw_nodes(child, level + 1)
-                
+
         draw_nodes(self.activeRoot, 0)
         lines.append('</svg>')
         return "\n".join(lines)
@@ -1696,9 +1710,9 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
     def auto_arrange(self, event):
         if not self.activeRoot: return
         if event is not None: self.save_state() 
-        
+
         mode = getattr(self, 'current_view_mode', 'map')
-        
+
         if mode == 'grid':
             self.populate_grid()
         elif mode == 'features':
@@ -1715,8 +1729,12 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
 
     def update_features_master_table(self):
         self.features_master_model.setRowCount(0)
+        self.visible_features = []
         for f in self.features:
-            self.features_master_model.addRow([f["name"], str(len(f["requests"]))])
+            if getattr(self, 'hide_tested', False) and f.get("tested", False):
+                continue
+            self.visible_features.append(f)
+            self.features_master_model.addRow([f["name"], str(len(f["requests"])), Boolean(f.get("tested", False))])
 
     def update_features_detail_table(self):
         self.features_reqs_model.setRowCount(0)
@@ -1725,7 +1743,7 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
             reqs = self.features_reqs_model.current_feature["requests"]
         elif self.is_recording_feature:
             reqs = self.recorded_reqs
-            
+
         for r in reqs:
             self.features_reqs_model.addRow([r["method"], r["url"], r["notes"]])
 
@@ -1734,24 +1752,24 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
         self.table_model.setRowCount(0)
         self.table_model.row_nodes = []
         if not self.activeRoot: return
-        
+
         def traverse(node):
             if not self.should_show(node): return
-            
+
             has_http_data = (len(node.statuses) > 0) or (node.linked_request is not None) or (len(node.methods) > 0)
-            
+
             if node != self.activeRoot:
                 if not getattr(node, 'is_manual', False) and has_http_data:
                     self.table_model.row_nodes.append(node)
                     row_data = ["", "", False, ""]
                     for _ in self.custom_columns: row_data.append("")
                     self.table_model.addRow(row_data)
-                
+
             if getattr(node, 'collapsed', False): return 
-                
+
             for child in node.children:
                 traverse(child)
-                
+
         traverse(self.activeRoot)
 
     def on_tab_changed(self):
@@ -1760,11 +1778,11 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
         panel = self.tabbed_pane.getComponentAt(idx)
         root = panel.getClientProperty("target_root")
         self.activeRoot = root
-        
+
         panel.add(self.outer_split_pane, BorderLayout.CENTER)
         panel.revalidate()
         panel.repaint()
-        
+
         self.selected_nodes = set()
         self.selected_feature_req = None
         self.update_toolbar()
@@ -1774,24 +1792,24 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
         if host in self.target_roots: return
         root = existing_node if existing_node else MindMapNode(host)
         self.target_roots[host] = root
-        
+
         dummy_panel = JPanel(BorderLayout())
         dummy_panel.putClientProperty("target_root", root)
-        
+
         idx = self.tabbed_pane.getTabCount()
         self.tabbed_pane.addTab(host, dummy_panel)
-        
+
         tab_comp = JPanel(CardLayout())
         tab_comp.setOpaque(False)
         tab_comp.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)) 
-        
+
         lbl = JLabel(host)
         lbl.setBorder(BorderFactory.createEmptyBorder(5, 10, 5, 10)) 
         txt = JTextField(host, 15)
-        
+
         tab_comp.add(lbl, "label")
         tab_comp.add(txt, "edit")
-        
+
         def handle_mouse_click(e):
             tab_idx = self.tabbed_pane.indexOfTabComponent(tab_comp)
             if tab_idx != -1:
@@ -1802,14 +1820,14 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
                     tab_comp.getLayout().show(tab_comp, "edit")
                     txt.requestFocusInWindow()
                     txt.selectAll()
-                    
+
         click_listener = type("TabClickListener", (MouseAdapter,), {
             "mouseClicked": lambda self, e: handle_mouse_click(e)
         })()
-        
+
         lbl.addMouseListener(click_listener)
         tab_comp.addMouseListener(click_listener)
-        
+
         def commit_edit(e):
             new_name = txt.getText().strip()
             if new_name:
@@ -1821,15 +1839,15 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
             card = tab_comp.getLayout()
             card.show(tab_comp, "label")
             self.auto_arrange(None)
-            
+
         txt.addActionListener(lambda e: commit_edit(e))
         txt.addFocusListener(type("Focus", (FocusListener,), {
             "focusLost": lambda self, e: commit_edit(e),
             "focusGained": lambda self, e: None
         })())
-        
+
         self.tabbed_pane.setTabComponentAt(idx, tab_comp)
-        
+
         if self.activeRoot is None:
             self.tabbed_pane.setSelectedIndex(idx)
 
@@ -1845,7 +1863,7 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
 
     def render_map(self):
         if not self.activeRoot: return
-        
+
         def find_max_bounds(node):
             if not self.should_show(node):
                 return 0, 0
@@ -1857,25 +1875,25 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
                 if cmx > mx: mx = cmx
                 if cmy > my: my = cmy
             return mx, my
-            
+
         actual_max_x, actual_max_y = find_max_bounds(self.activeRoot)
-        
+
         img_width = int((actual_max_x + 300) * self.zoom_factor)
         img_height = int((actual_max_y + 300) * self.zoom_factor)
-        
+
         img_width = max(img_width, 1000)
         img_height = max(img_height, 800)
-        
+
         image = BufferedImage(img_width, img_height, BufferedImage.TYPE_INT_ARGB)
         g2d = image.createGraphics()
-        
+
         base_bg = UIManager.getColor("Panel.background") or Color(60, 63, 65)
         g2d.setColor(base_bg)
         g2d.fillRect(0, 0, img_width, img_height)
         g2d.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
-        
+
         g2d.scale(self.zoom_factor, self.zoom_factor)
-        
+
         self.relation_paths = {}
         for src_id, tgt_id in self.relationships:
             src = self.find_node_by_id(self.activeRoot, src_id)
@@ -1885,13 +1903,13 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
                 sy = src.y + src.height / 2.0
                 tx = tgt.x
                 ty = tgt.y + tgt.height / 2.0
-                
+
                 path = Path2D.Float()
                 path.moveTo(sx, sy)
                 path.curveTo(sx + 60, sy, tx - 60, ty, tx, ty)
-                
+
                 self.relation_paths[(src_id, tgt_id)] = path
-                
+
                 is_sel = getattr(self, 'selected_relation', None) == (src_id, tgt_id)
                 if is_sel:
                     g2d.setColor(Color(59, 130, 246)) 
@@ -1900,9 +1918,9 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
                     g2d.setColor(Color.WHITE) 
                     g2d.setStroke(BasicStroke(2.0, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND, 10.0, [8.0, 8.0], 0.0))
                 g2d.draw(path)
-                
+
         self.draw_node(g2d, self.activeRoot, 0)
-        
+
         g2d.dispose() 
         self.map_label.setIcon(ImageIcon(image))
         self.map_label.getParent().revalidate()
@@ -1916,7 +1934,7 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
             badge_text = " ".join(node.methods)
             if node.statuses and show_status:
                 badge_text += " [" + ",".join([str(s) for s in node.statuses]) + "]"
-            
+
         show_params = hasattr(self, 'params_cb') and self.params_cb.isSelected() and node.params
         max_param_w = 0
         param_height = 0
@@ -1925,7 +1943,7 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
                 pw = metrics.stringWidth(p)
                 if pw > max_param_w: max_param_w = pw
             param_height = len(node.params) * 14 + 10
-        
+
         if getattr(node, 'manual_resize', False):
             text_lines = self.wrap_text(display_text, metrics, node.width - 10)
             w1 = 0
@@ -1934,43 +1952,43 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
             w1 = max([metrics.stringWidth(line) for line in text_lines]) if text_lines else 0
 
         w2 = metrics.stringWidth(badge_text) - 10 if badge_text else 0
-        
+
         if not getattr(node, 'manual_resize', False):
             min_w = max(w1, w2, max_param_w) + 24
             node.width = max(min_w, 70) 
-            
+
         text_height = len(text_lines) * 14
-        
+
         if not getattr(node, 'manual_resize', False):
             node.height = max(44, text_height + 30) + param_height
         else:
             node.height = max(node.height, text_height + 30 + param_height)
-            
+
         visible_children = [] if getattr(node, 'collapsed', False) else [c for c in node.children if self.should_show(c)]
-        
+
         if not visible_children:
             node.subtree_height = node.height + 10 
             node.subtree_width = node.width + 10
             return
-            
+
         total_height = 0
         total_width = 0
         for child in visible_children:
             self.calculate_subtree_dimensions(child, metrics)
             total_height += child.subtree_height
             total_width += child.subtree_width
-            
+
         node.subtree_height = max(total_height, node.height + 10)
         node.subtree_width = max(total_width, node.width + 10)
 
     def assign_coordinates_horizontal(self, node, x, y_start):
         node.x = x
         visible_children = [] if getattr(node, 'collapsed', False) else [c for c in node.children if self.should_show(c)]
-        
+
         if not visible_children:
             node.y = y_start + (node.subtree_height / 2.0) - (node.height / 2.0)
             return
-            
+
         node.y = y_start + (node.subtree_height / 2.0) - (node.height / 2.0)
         current_y = y_start
         for child in visible_children:
@@ -1980,11 +1998,11 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
     def assign_coordinates_vertical(self, node, x_start, y):
         node.y = y
         visible_children = [] if getattr(node, 'collapsed', False) else [c for c in node.children if self.should_show(c)]
-        
+
         if not visible_children:
             node.x = x_start + (node.subtree_width / 2.0) - (node.width / 2.0)
             return
-            
+
         node.x = x_start + (node.subtree_width / 2.0) - (node.width / 2.0)
         current_x = x_start
         for child in visible_children:
@@ -2001,14 +2019,14 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
 
         g2d.setColor(border_color)
         g2d.setStroke(BasicStroke(1.5))
-        
+
         if self.is_vertical_layout:
             p_x = node.x + node.width / 2.0
             p_y = node.y + node.height
         else:
             p_x = node.x + node.width
             p_y = node.y + 22 
-        
+
         visible_children = [] if getattr(node, 'collapsed', False) else [c for c in node.children if self.should_show(c)]
         for child in visible_children:
             path = Path2D.Float()
@@ -2036,15 +2054,15 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
             g2d.setColor(UIManager.getColor("Button.background") or Color.GRAY)
         else: 
             g2d.setColor(node_bg)
-            
+
         nx, ny, nw, nh = int(node.x), int(node.y), int(node.width), int(node.height)
         g2d.fillRoundRect(nx, ny, nw, nh, 10, 10)
-        
+
         severity_colors = {
             "High": Color(239, 68, 68), "Medium": Color(249, 115, 22), 
             "Low": Color(234, 179, 8), "Information": Color(59, 130, 246)
         }
-        
+
         theme_border_color = BURP_ORANGE
         if getattr(self, 'current_theme', 'Default') == "Light":
             dracula = [
@@ -2052,23 +2070,23 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
                 Color(255, 121, 198), Color(241, 250, 140), Color(255, 184, 108)
             ]
             theme_border_color = dracula[level % len(dracula)]
-            
+
         elif getattr(self, 'current_theme', 'Default') == "Synthwave":
             ayu_dark = [
                 Color(210, 168, 255), Color(57, 186, 230), Color(170, 217, 76), 
                 Color(255, 180, 84),  Color(240, 113, 120), Color(89, 194, 255)
             ]
             theme_border_color = ayu_dark[level % len(ayu_dark)] 
-            
+
         elif getattr(self, 'current_theme', 'Default') == "Vibrant":
             vibrant_colors = [
                 Color(255,255,255), Color(0, 229, 255), Color(255, 42, 42), 
                 Color(0, 255, 195), Color(213, 0, 255), Color(173, 255, 0)
             ]
             theme_border_color = vibrant_colors[level % len(vibrant_colors)]
-        
+
         current_node_border_color = theme_border_color
-        
+
         if node in self.selected_nodes:
             current_node_border_color = Color(59, 130, 246)
             g2d.setColor(current_node_border_color) 
@@ -2092,16 +2110,16 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
         else:
             g2d.setColor(current_node_border_color) 
             g2d.setStroke(BasicStroke(1.2)) 
-            
+
         g2d.drawRoundRect(nx, ny, nw, nh, 10, 10)
-        
+
         if getattr(self, 'relate_source', None) == node:
             g2d.setColor(Color(255, 255, 255))
             g2d.setStroke(BasicStroke(2.0, BasicStroke.CAP_BUTT, BasicStroke.JOIN_BEVEL, 0, [5.0, 5.0], 0))
             g2d.drawRoundRect(nx - 4, ny - 4, nw + 8, nh + 8, 10, 10)
-        
+
         show_params = hasattr(self, 'params_cb') and self.params_cb.isSelected() and node.params
-        
+
         if show_params:
             g2d.drawLine(nx, ny + 44, nx + nw, ny + 44)
 
@@ -2114,28 +2132,28 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
         base_font = UIManager.getFont("Label.font")
         g2d.setFont(base_font)
         metrics = g2d.getFontMetrics()
-        
+
         display_text = node.text
         text_lines = self.wrap_text(display_text, metrics, node.width - 10)
-        
+
         show_status = not hasattr(self, 'status_cb') or self.status_cb.isSelected()
         has_badges = bool(node.methods or (node.statuses and show_status))
-        
+
         line_height = metrics.getHeight()
-        
+
         if has_badges:
             start_y = int(node.y + 18)
             for i, line in enumerate(text_lines):
                 lx = int(node.x + (node.width - metrics.stringWidth(line)) / 2)
                 g2d.drawString(line, lx, start_y + (i * line_height))
-                
+
             g2d.setFont(Font("SansSerif", Font.PLAIN, 10))
             badge_metrics = g2d.getFontMetrics()
-            
+
             badge_text = " ".join(node.methods)
             if node.statuses and show_status:
                 badge_text += " [" + ",".join([str(s) for s in node.statuses]) + "]"
-                
+
             bx = int(node.x + (node.width - badge_metrics.stringWidth(badge_text)) / 2)
             by = int(start_y + (len(text_lines) * line_height) + 4)
             g2d.setColor(Color.GRAY)
@@ -2147,7 +2165,7 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
             for i, line in enumerate(text_lines):
                 lx = int(node.x + (node.width - metrics.stringWidth(line)) / 2)
                 g2d.drawString(line, lx, start_y + (i * line_height))
-            
+
         if show_params:
             g2d.setFont(Font("SansSerif", Font.PLAIN, 10))
             g2d.setColor(theme_border_color) 
@@ -2157,42 +2175,42 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
                 g2d.drawString(param, px, py)
                 py += 14
             g2d.setFont(base_font)
-        
+
         g2d.setColor(Color(59, 130, 246) if node in self.selected_nodes else border_color)
         rx, ry = int(node.x + node.width), int(node.y + node.height)
         g2d.drawLine(rx - 6, ry - 2, rx - 2, ry - 6)
         g2d.drawLine(rx - 10, ry - 2, rx - 2, ry - 10)
-        
+
         has_potentially_visible_children = len([c for c in node.children if self.should_show(c)]) > 0
         if has_potentially_visible_children:
             bx = int(nx + nw / 2.0) if self.is_vertical_layout else int(nx + nw)
             by = int(ny + nh) if self.is_vertical_layout else int(ny + 22)
-            
+
             r = 6 
-            
+
             g2d.setColor(bg_color)
             g2d.fillOval(bx - r, by - r, r*2, r*2)
-            
+
             g2d.setColor(current_node_border_color)
             g2d.setStroke(BasicStroke(1.2))
             g2d.drawOval(bx - r, by - r, r*2, r*2)
-            
+
             g2d.setColor(fg_color)
             g2d.setStroke(BasicStroke(1.2))
-            
+
             if getattr(node, 'collapsed', False):
                 g2d.drawLine(bx - 3, by, bx + 3, by)
                 g2d.drawLine(bx, by - 3, bx, by + 3)
             else:
                 g2d.drawLine(bx - 3, by, bx + 3, by)
-        
+
         for child in visible_children:
             self.draw_node(g2d, child, level + 1)
 
 class UIBuilder(Runnable):
     def __init__(self, extender):
         self.extender = extender
-        
+
     def run(self):
         def style_btn(b, bg=Color(60, 63, 65), fg=Color.WHITE):
             b.setBackground(bg)
@@ -2205,7 +2223,7 @@ class UIBuilder(Runnable):
             ))
             b.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR))
             return b
-            
+
         def style_textfield(tf, border_color=Color.GRAY):
             tf.setBorder(BorderFactory.createCompoundBorder(
                 BorderFactory.createLineBorder(border_color, 1, True),
@@ -2215,10 +2233,10 @@ class UIBuilder(Runnable):
             return tf
 
         self.extender.mainPanel = JPanel(BorderLayout())
-        
+
         topBar = JPanel(FlowLayout(FlowLayout.LEFT, 10, 10))
         topBar.setBorder(BorderFactory.createMatteBorder(0, 0, 1, 0, Color.DARK_GRAY))
-        
+
         loadScopeBtn = JButton("Load Scope & History")
         style_btn(loadScopeBtn, bg=BURP_ORANGE)
         loadScopeBtn.setFont(Font("SansSerif", Font.BOLD, 11))
@@ -2229,12 +2247,12 @@ class UIBuilder(Runnable):
             self.extender.load_scope_and_history()
         loadScopeBtn.addActionListener(do_load_scope)
         topBar.add(loadScopeBtn)
-        
+
         saveProjBtn = JButton(u"Save to Project")
         style_btn(saveProjBtn, bg=Color(43, 43, 43))
         saveProjBtn.addActionListener(lambda e: self.extender.save_project_state(e))
         topBar.add(saveProjBtn)
-        
+
         loadProjBtn = JButton(u"Load from Project")
         style_btn(loadProjBtn, bg=Color(43, 43, 43))
         loadProjBtn.addActionListener(lambda e: self.extender.load_project_state(e))
@@ -2249,22 +2267,24 @@ class UIBuilder(Runnable):
         style_btn(importJsonBtn, bg=Color(43, 43, 43))
         importJsonBtn.addActionListener(lambda e: self.extender.import_workspace_json(e))
         topBar.add(importJsonBtn)
-        
+
         exportExcelBtn = JButton(u"Export XLS")
         style_btn(exportExcelBtn, bg=Color(43, 43, 43))
         exportExcelBtn.addActionListener(lambda e: self.extender.export_excel(e))
         topBar.add(exportExcelBtn)
-        
+
         self.extender.hideTestedBtn = JToggleButton(u"Hide Tested")
         style_btn(self.extender.hideTestedBtn)
         def toggle_hide_tested(e):
             self.extender.hide_tested = self.extender.hideTestedBtn.isSelected()
             self.extender.auto_arrange(None)
+            if hasattr(self.extender, 'features_master_model'):
+                self.extender.update_features_master_table()
         self.extender.hideTestedBtn.addActionListener(toggle_hide_tested)
         topBar.add(self.extender.hideTestedBtn)
-        
-        toggleBtn = JButton(u"Tools")
-        style_btn(toggleBtn)
+
+        self.extender.toolsBtn = JButton(u"Tools")
+        style_btn(self.extender.toolsBtn)
         def toggle_sidebar(e):
             is_vis = not self.extender.sidebarScroll.isVisible()
             self.extender.sidebarScroll.setVisible(is_vis)
@@ -2273,30 +2293,30 @@ class UIBuilder(Runnable):
                 target_loc = w - 260 if w > 300 else int(w * 0.7)
                 self.extender.split_pane.setDividerLocation(target_loc)
             self.extender.mainPanel.revalidate()
-        toggleBtn.addActionListener(toggle_sidebar)
-        topBar.add(toggleBtn)
-        
-        toggleLayoutBtn = JButton(u"Toggle View")
-        style_btn(toggleLayoutBtn)
+        self.extender.toolsBtn.addActionListener(toggle_sidebar)
+        topBar.add(self.extender.toolsBtn)
+
+        self.extender.toggleLayoutBtn = JButton(u"Toggle View")
+        style_btn(self.extender.toggleLayoutBtn)
         def toggle_layout(e):
             self.extender.is_vertical_layout = not self.extender.is_vertical_layout
             self.extender.auto_arrange(None)
-        toggleLayoutBtn.addActionListener(toggle_layout)
-        topBar.add(toggleLayoutBtn)
-        
+        self.extender.toggleLayoutBtn.addActionListener(toggle_layout)
+        topBar.add(self.extender.toggleLayoutBtn)
+
         view_toggle_panel = JPanel(FlowLayout(FlowLayout.LEFT, 0, 0))
         btn_grp = ButtonGroup()
-        
+
         btn_map = JToggleButton("Visual Map")
         btn_grid = JToggleButton("Grid View")
         btn_features = JToggleButton("Features View")
         btn_map.setSelected(True)
-        
+
         for b in [btn_map, btn_grid, btn_features]:
             style_btn(b)
             btn_grp.add(b)
             view_toggle_panel.add(b)
-            
+
         def switch_view(mode):
             self.extender.selected_nodes = set()
             self.extender.selected_feature_req = None
@@ -2304,7 +2324,13 @@ class UIBuilder(Runnable):
             if hasattr(self.extender, 'close_feature_note'):
                 self.extender.close_feature_note()
             self.extender.update_toolbar()
-            
+
+            # Contextual Toolbar Buttons
+            is_map = (mode == "map")
+            self.extender.toolsBtn.setVisible(is_map)
+            self.extender.toggleLayoutBtn.setVisible(is_map)
+            self.extender.relateBtn.setVisible(is_map)
+
             # Hide Tabs for Feature View
             if mode == "features":
                 self.extender.mainPanel.remove(self.extender.tabbed_pane)
@@ -2313,7 +2339,7 @@ class UIBuilder(Runnable):
                 self.extender.mainPanel.remove(self.extender.outer_split_pane)
                 self.extender.mainPanel.add(self.extender.tabbed_pane, BorderLayout.CENTER)
                 self.extender.on_tab_changed()
-                
+
             if mode == "map":
                 self.extender.viewCards.show(self.extender.viewContainer, "canvas")
                 self.extender.render_map()
@@ -2323,16 +2349,16 @@ class UIBuilder(Runnable):
             elif mode == "features":
                 self.extender.update_features_master_table()
                 self.extender.viewCards.show(self.extender.viewContainer, "features")
-                
+
             self.extender.mainPanel.revalidate()
             self.extender.mainPanel.repaint()
-                
+
         btn_map.addActionListener(lambda e: switch_view("map"))
         btn_grid.addActionListener(lambda e: switch_view("grid"))
         btn_features.addActionListener(lambda e: switch_view("features"))
-        
+
         topBar.add(view_toggle_panel)
-        
+
         self.extender.relateBtn = JToggleButton(u"Relate Nodes")
         style_btn(self.extender.relateBtn)
         def toggle_relate(e):
@@ -2345,25 +2371,25 @@ class UIBuilder(Runnable):
             self.extender.render_map()
         self.extender.relateBtn.addActionListener(toggle_relate)
         topBar.add(self.extender.relateBtn)
-        
+
         self.extender.mainPanel.add(topBar, BorderLayout.NORTH)
-        
+
         self.extender.sidebar = JPanel()
         self.extender.sidebar.setLayout(BoxLayout(self.extender.sidebar, BoxLayout.Y_AXIS))
         self.extender.sidebar.setBorder(BorderFactory.createCompoundBorder(
             BorderFactory.createMatteBorder(0, 1, 0, 0, Color.DARK_GRAY),
             BorderFactory.createEmptyBorder(15, 15, 15, 15)
         ))
-        
+
         self.extender.sidebarScroll = JScrollPane(self.extender.sidebar)
         self.extender.sidebarScroll.getVerticalScrollBar().setUnitIncrement(16) 
         self.extender.sidebarScroll.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_NEVER)
         self.extender.sidebarScroll.setBorder(BorderFactory.createEmptyBorder())
-        
+
         self.extender.sidebarScroll.setPreferredSize(Dimension(260, 0))
         self.extender.sidebarScroll.setMinimumSize(Dimension(180, 0))
         self.extender.sidebarScroll.setVisible(False)
-        
+
         def add_sidebar_section(title, comp):
             p = JPanel(BorderLayout(0, 5))
             p.setAlignmentX(JComponent.LEFT_ALIGNMENT)
@@ -2381,22 +2407,22 @@ class UIBuilder(Runnable):
         self.extender.filterField = style_textfield(JTextField(".js, .css, .png, .jpg, .jpeg, .gif, .svg, .ico, .woff, .woff2"), BURP_ORANGE)
         self.extender.filterField.addActionListener(lambda e: self.extender.auto_arrange(None)) 
         f_panel.add(self.extender.filterField)
-        
+
         f_panel.add(JLabel("Include Exts:"))
         self.extender.includeField = style_textfield(JTextField(""), BURP_ORANGE)
         self.extender.includeField.addActionListener(lambda e: self.extender.auto_arrange(None)) 
         f_panel.add(self.extender.includeField)
-        
+
         f_panel.add(JLabel("Hide Status Codes (comma separated):"))
         self.extender.hide_status_field = style_textfield(JTextField("0, 404, 500, 302, 301"), BURP_ORANGE)
         self.extender.hide_status_field.addActionListener(lambda e: self.extender.auto_arrange(None))
         f_panel.add(self.extender.hide_status_field)
-        
+
         f_panel.add(JLabel("Hide Content-Length (comma separated):"))
         self.extender.cl_filter_field = style_textfield(JTextField(""), BURP_ORANGE)
         self.extender.cl_filter_field.addActionListener(lambda e: self.extender.auto_arrange(None))
         f_panel.add(self.extender.cl_filter_field)
-        
+
         add_sidebar_section("FILTERS", f_panel)
 
         s_panel = JPanel(GridLayout(5, 1, 2, 5)) 
@@ -2447,7 +2473,7 @@ class UIBuilder(Runnable):
             btn.addActionListener(make_action(c))
             c_panel.add(btn)
         add_sidebar_section("COLORS", c_panel)
-        
+
         t_panel = JPanel(GridLayout(4, 1, 2, 5))
         themes = ["Default", "Light", "Synthwave", "Vibrant"]
         for t_name in themes:
@@ -2456,15 +2482,15 @@ class UIBuilder(Runnable):
             btn.addActionListener(make_theme_action(t_name))
             t_panel.add(btn)
         add_sidebar_section("THEMES", t_panel)
-        
+
         self.extender.sidebar.add(Box.createVerticalGlue())
-        
+
         # View 1: Canvas Map
         self.extender.map_label = JLabel()
         self.extender.map_label.setHorizontalAlignment(JLabel.LEFT) 
         self.extender.map_label.setVerticalAlignment(JLabel.TOP)
         self.extender.map_label.setLayout(None) 
-        
+
         self.extender.inline_edit_field = JTextArea()
         self.extender.inline_edit_field.setLineWrap(True)
         self.extender.inline_edit_field.setWrapStyleWord(True)
@@ -2473,31 +2499,31 @@ class UIBuilder(Runnable):
             BorderFactory.createLineBorder(Color(59, 130, 246), 2, True),
             BorderFactory.createEmptyBorder(2, 5, 2, 5)
         ))
-        
+
         edit_listener = EditFieldListener(self.extender)
         self.extender.inline_edit_field.addKeyListener(edit_listener)
         self.extender.inline_edit_field.addFocusListener(edit_listener)
         self.extender.map_label.add(self.extender.inline_edit_field)
-        
+
         mouse_handler = MapMouseHandler(self.extender)
         self.extender.map_label.addMouseListener(mouse_handler)
         self.extender.map_label.addMouseMotionListener(mouse_handler)
         self.extender.map_label.addMouseWheelListener(mouse_handler) 
-        
+
         self.extender.canvasScroll = JScrollPane(self.extender.map_label)
         self.extender.canvasScroll.getHorizontalScrollBar().setUnitIncrement(24)
         self.extender.canvasScroll.getVerticalScrollBar().setUnitIncrement(24)
         self.extender.canvasScroll.setBorder(BorderFactory.createEmptyBorder())
         self.extender.canvasScroll.setFocusable(True)
         self.extender.canvasScroll.setFocusTraversalKeysEnabled(False)
-        
+
         # View 2: Grid View
         self.extender.table_model = MindMapTableModel(self.extender)
         self.extender.gridTable = JTable(self.extender.table_model)
         self.extender.gridTable.setRowHeight(25)
         self.extender.gridTable.setFillsViewportHeight(True)
         self.extender.gridTable.getTableHeader().setFont(Font("SansSerif", Font.BOLD, 12))
-        
+
         def row_selected(e):
             if e.getValueIsAdjusting(): return
             row = self.extender.gridTable.getSelectedRow()
@@ -2506,7 +2532,7 @@ class UIBuilder(Runnable):
                 self.extender.selected_nodes = {node}
                 self.extender.update_toolbar()
         self.extender.gridTable.getSelectionModel().addListSelectionListener(row_selected)
-        
+
         def grid_key_pressed(e):
             if e.getKeyCode() == KeyEvent.VK_DELETE:
                 if self.extender.gridTable.isEditing(): return
@@ -2519,10 +2545,10 @@ class UIBuilder(Runnable):
                     e.consume()
         self.extender.gridTable.addKeyListener(type("GridKeyListener", (KeyAdapter,), {"keyPressed": lambda s, e: grid_key_pressed(e)})())
         self.extender.gridTable.addMouseListener(GridMouseHandler(self.extender))
-        
+
         grid_wrapper = JPanel(BorderLayout())
         grid_toolbar = JPanel(FlowLayout(FlowLayout.LEFT))
-        
+
         addColBtn = JButton("[+] Add Column")
         style_btn(addColBtn)
         def add_col_action(e):
@@ -2533,7 +2559,7 @@ class UIBuilder(Runnable):
                 self.extender.save_state()
         addColBtn.addActionListener(add_col_action)
         grid_toolbar.add(addColBtn)
-        
+
         remColBtn = JButton("[-] Delete Column")
         style_btn(remColBtn)
         def rem_col_action(e):
@@ -2549,7 +2575,7 @@ class UIBuilder(Runnable):
                 self.extender.save_state()
         remColBtn.addActionListener(rem_col_action)
         grid_toolbar.add(remColBtn)
-        
+
         delRowBtn = JButton("[x] Delete Line")
         style_btn(delRowBtn)
         def del_row_action(e):
@@ -2561,17 +2587,17 @@ class UIBuilder(Runnable):
                 self.extender.populate_grid()
         delRowBtn.addActionListener(del_row_action)
         grid_toolbar.add(delRowBtn)
-        
+
         grid_wrapper.add(grid_toolbar, BorderLayout.NORTH)
-        
+
         self.extender.gridScroll = JScrollPane(self.extender.gridTable)
         self.extender.gridScroll.setBorder(BorderFactory.createEmptyBorder())
         grid_wrapper.add(self.extender.gridScroll, BorderLayout.CENTER)
-        
+
         # View 3: Features View
         features_wrapper = JPanel(BorderLayout())
         feat_toolbar = JPanel(FlowLayout(FlowLayout.LEFT))
-        
+
         recordBtn = JToggleButton("Record Feature")
         style_btn(recordBtn)
         recordBtn.setForeground(Color(255, 80, 80))
@@ -2588,7 +2614,7 @@ class UIBuilder(Runnable):
                 recordBtn.setText("Record Feature")
         recordBtn.addActionListener(toggle_record)
         feat_toolbar.add(recordBtn)
-        
+
         saveFeatBtn = JButton("Save Feature")
         style_btn(saveFeatBtn)
         def save_feat_action(e):
@@ -2601,7 +2627,8 @@ class UIBuilder(Runnable):
                     "id": str(uuid.uuid4()),
                     "name": name.strip(),
                     "requests": list(self.extender.recorded_reqs),
-                    "notes": ""
+                    "notes": "",
+                    "tested": False
                 }
                 self.extender.features.append(new_feat)
                 self.extender.save_state()
@@ -2612,42 +2639,53 @@ class UIBuilder(Runnable):
                 self.extender.update_features_detail_table()
         saveFeatBtn.addActionListener(save_feat_action)
         feat_toolbar.add(saveFeatBtn)
-        
+
         delFeatBtn = JButton("Delete Feature")
         style_btn(delFeatBtn)
         def del_feat_action(e):
             row = self.extender.features_master_table.getSelectedRow()
             if row >= 0:
-                del self.extender.features[row]
+                feat = self.extender.visible_features[row]
+                self.extender.features.remove(feat)
                 self.extender.features_reqs_model.current_feature = None
                 self.extender.save_state()
                 self.extender.update_features_master_table()
                 self.extender.update_features_detail_table()
         delFeatBtn.addActionListener(del_feat_action)
         feat_toolbar.add(delFeatBtn)
-        
+
         features_wrapper.add(feat_toolbar, BorderLayout.NORTH)
-        
+
         master_panel = JPanel(BorderLayout())
         self.extender.features_master_model = FeaturesMasterTableModel(self.extender)
         self.extender.features_master_table = JTable(self.extender.features_master_model)
         self.extender.features_master_table.setSelectionMode(ListSelectionModel.SINGLE_SELECTION)
         self.extender.features_master_table.setFillsViewportHeight(True)
-        
+
+        feat_name_col = self.extender.features_master_table.getColumnModel().getColumn(0)
+        feat_name_col.setMinWidth(100)
+        feat_name_col.setMaxWidth(150)
+        feat_name_col.setPreferredWidth(120)
+
+        feat_tested_col = self.extender.features_master_table.getColumnModel().getColumn(2)
+        feat_tested_col.setMinWidth(50)
+        feat_tested_col.setMaxWidth(60)
+        feat_tested_col.setPreferredWidth(55)
+
         self.extender.feature_note_area = JTextArea()
         self.extender.feature_note_area.setLineWrap(True)
         self.extender.feature_note_area.setWrapStyleWord(True)
         self.extender.feature_note_area.setBackground(UIManager.getColor("TextField.background") or Color.DARK_GRAY)
         self.extender.feature_note_area.setForeground(UIManager.getColor("TextField.foreground") or Color.WHITE)
-        
+
         self.extender.feature_note_scroll = JScrollPane(self.extender.feature_note_area)
         self.extender.feature_note_scroll.setBorder(BorderFactory.createTitledBorder("Feature Notes"))
         self.extender.feature_note_scroll.setPreferredSize(Dimension(0, 150))
         self.extender.feature_note_scroll.setVisible(False)
-        
+
         master_panel.add(JScrollPane(self.extender.features_master_table), BorderLayout.CENTER)
         master_panel.add(self.extender.feature_note_scroll, BorderLayout.SOUTH)
-        
+
         def close_feature_note():
             if getattr(self.extender, 'editing_feature', None):
                 self.extender.editing_feature["notes"] = self.extender.feature_note_area.getText()
@@ -2655,9 +2693,9 @@ class UIBuilder(Runnable):
                 self.extender.editing_feature = None
             self.extender.feature_note_scroll.setVisible(False)
             self.extender.features_master_table.getParent().revalidate()
-            
+
         self.extender.close_feature_note = close_feature_note
-        
+
         def feat_master_mouse_clicked(e):
             row = self.extender.features_master_table.rowAtPoint(e.getPoint())
             if row == -1: 
@@ -2669,7 +2707,7 @@ class UIBuilder(Runnable):
                 self.extender.update_toolbar()
             else:
                 if e.getClickCount() == 1:
-                    feat = self.extender.features[row]
+                    feat = self.extender.visible_features[row]
                     self.extender.editing_feature = feat
                     self.extender.feature_note_area.setText(feat.get("notes", ""))
                     self.extender.feature_note_scroll.setVisible(True)
@@ -2677,24 +2715,24 @@ class UIBuilder(Runnable):
                     self.extender.features_master_table.getParent().revalidate()
 
         self.extender.features_master_table.addMouseListener(type("MasterMouseListener", (MouseAdapter,), {"mouseClicked": lambda s, e: feat_master_mouse_clicked(e)})())
-        
+
         def feat_master_selected(e):
             if e.getValueIsAdjusting(): return
             row = self.extender.features_master_table.getSelectedRow()
             if row >= 0:
-                self.extender.features_reqs_model.current_feature = self.extender.features[row]
+                self.extender.features_reqs_model.current_feature = self.extender.visible_features[row]
                 self.extender.update_features_detail_table()
         self.extender.features_master_table.getSelectionModel().addListSelectionListener(feat_master_selected)
-        
+
         self.extender.features_reqs_model = FeatureReqsTableModel(self.extender)
         self.extender.features_reqs_table = JTable(self.extender.features_reqs_model)
         self.extender.features_reqs_table.setFillsViewportHeight(True)
-        
+
         method_col = self.extender.features_reqs_table.getColumnModel().getColumn(0)
         method_col.setMinWidth(65)
         method_col.setMaxWidth(85)
         method_col.setPreferredWidth(70)
-        
+
         def feat_req_selected(e):
             if e.getValueIsAdjusting(): return
             row = self.extender.features_reqs_table.getSelectedRow()
@@ -2705,7 +2743,7 @@ class UIBuilder(Runnable):
                     self.extender.selected_feature_req = self.extender.recorded_reqs[row]
                 self.extender.update_toolbar()
         self.extender.features_reqs_table.getSelectionModel().addListSelectionListener(feat_req_selected)
-        
+
         def feat_req_mouse_clicked(e):
             row = self.extender.features_reqs_table.rowAtPoint(e.getPoint())
             if row == -1: 
@@ -2713,9 +2751,9 @@ class UIBuilder(Runnable):
                 self.extender.selected_feature_req = None
                 self.extender.update_toolbar()
             self.extender.close_feature_note()
-            
+
         self.extender.features_reqs_table.addMouseListener(type("ReqMouseListener", (MouseAdapter,), {"mouseClicked": lambda s, e: feat_req_mouse_clicked(e)})())
-        
+
         def feat_req_key_pressed(e):
             if e.getKeyCode() == KeyEvent.VK_DELETE:
                 if self.extender.features_reqs_table.isEditing(): return
@@ -2730,39 +2768,39 @@ class UIBuilder(Runnable):
                     self.extender.update_features_detail_table()
                     e.consume()
         self.extender.features_reqs_table.addKeyListener(type("FeatKeyListener", (KeyAdapter,), {"keyPressed": lambda s, e: feat_req_key_pressed(e)})())
-        
+
         feat_split = JSplitPane(JSplitPane.HORIZONTAL_SPLIT, master_panel, JScrollPane(self.extender.features_reqs_table))
         feat_split.setResizeWeight(0.3)
         features_wrapper.add(feat_split, BorderLayout.CENTER)
-        
+
         self.extender.viewCards = CardLayout()
         self.extender.viewContainer = JPanel(self.extender.viewCards)
         self.extender.viewContainer.add(self.extender.canvasScroll, "canvas")
         self.extender.viewContainer.add(grid_wrapper, "grid")
         self.extender.viewContainer.add(features_wrapper, "features")
-        
+
         input_map = self.extender.canvasScroll.getInputMap(JComponent.WHEN_ANCESTOR_OF_FOCUSED_COMPONENT)
         action_map = self.extender.canvasScroll.getActionMap()
-        
+
         delete_action = DeleteNodeAction(self.extender)
         input_map.put(KeyStroke.getKeyStroke(KeyEvent.VK_DELETE, 0), "delete_node")
         input_map.put(KeyStroke.getKeyStroke(KeyEvent.VK_BACK_SPACE, 0), "delete_node")
         action_map.put("delete_node", delete_action)
-        
+
         ctrl_mask = Toolkit.getDefaultToolkit().getMenuShortcutKeyMask()
-        
+
         copy_action = CopyAction(self.extender)
         input_map.put(KeyStroke.getKeyStroke(KeyEvent.VK_C, ctrl_mask), "copy_node")
         action_map.put("copy_node", copy_action)
-        
+
         cut_action = CutAction(self.extender)
         input_map.put(KeyStroke.getKeyStroke(KeyEvent.VK_X, ctrl_mask), "cut_node")
         action_map.put("cut_node", cut_action)
-        
+
         paste_action = PasteAction(self.extender)
         input_map.put(KeyStroke.getKeyStroke(KeyEvent.VK_V, ctrl_mask), "paste_node")
         action_map.put("paste_node", paste_action)
-        
+
         repeater_action = SendToRepeaterAction(self.extender)
         input_map.put(KeyStroke.getKeyStroke(KeyEvent.VK_R, ctrl_mask), "send_repeater")
         action_map.put("send_repeater", repeater_action)
@@ -2771,8 +2809,6 @@ class UIBuilder(Runnable):
         input_map.put(KeyStroke.getKeyStroke(KeyEvent.VK_I, ctrl_mask), "send_intruder")
         action_map.put("send_intruder", intruder_action)
 
-        # Also bind on the whole tab (mainPanel) so Ctrl+R/Ctrl+I still fire while focus
-        # is inside the request/response traffic preview at the bottom, not just the map/grid.
         main_input_map = self.extender.mainPanel.getInputMap(JComponent.WHEN_ANCESTOR_OF_FOCUSED_COMPONENT)
         main_action_map = self.extender.mainPanel.getActionMap()
         main_input_map.put(KeyStroke.getKeyStroke(KeyEvent.VK_R, ctrl_mask), "send_repeater")
@@ -2805,22 +2841,22 @@ class UIBuilder(Runnable):
         add_child_action = AddChildNodeAction(self.extender)
         input_map.put(KeyStroke.getKeyStroke(KeyEvent.VK_TAB, 0), "add_child")
         action_map.put("add_child", add_child_action)
-        
+
         self.extender.split_pane = JSplitPane(JSplitPane.HORIZONTAL_SPLIT, self.extender.viewContainer, self.extender.sidebarScroll)
         self.extender.split_pane.setResizeWeight(1.0) 
         self.extender.split_pane.setContinuousLayout(True)
         self.extender.split_pane.setBorder(BorderFactory.createEmptyBorder())
-        
+
         self.extender.request_panel = JPanel(BorderLayout())
         self.extender.request_panel.setBorder(BorderFactory.createMatteBorder(1, 0, 0, 0, Color.DARK_GRAY))
-        
+
         title_panel = JPanel(BorderLayout())
         title_panel.setOpaque(False)
         title_lbl = JLabel(" Selected Node/Feature Traffic Preview:")
         title_lbl.setFont(Font("SansSerif", Font.BOLD, 11))
         title_lbl.setForeground(Color.LIGHT_GRAY)
         title_panel.add(title_lbl, BorderLayout.CENTER)
-        
+
         close_preview_btn = JButton("X")
         close_preview_btn.setMargin(Insets(0, 4, 0, 4))
         close_preview_btn.setFocusPainted(False)
@@ -2832,9 +2868,9 @@ class UIBuilder(Runnable):
             self.extender.request_panel.setVisible(False)
         close_preview_btn.addActionListener(hide_preview)
         title_panel.add(close_preview_btn, BorderLayout.EAST)
-        
+
         self.extender.request_panel.add(title_panel, BorderLayout.NORTH)
-        
+
         self.extender.request_text = JTextArea()
         self.extender.request_text.setFont(Font("Monospaced", Font.PLAIN, 11))
         self.extender.request_text.setEditable(False)
@@ -2843,7 +2879,7 @@ class UIBuilder(Runnable):
         self.extender.request_text.setForeground(UIManager.getColor("TextArea.foreground") or Color.WHITE)
         req_scroll = JScrollPane(self.extender.request_text)
         req_scroll.setBorder(BorderFactory.createTitledBorder("Request"))
-        
+
         self.extender.response_text = JTextArea()
         self.extender.response_text.setFont(Font("Monospaced", Font.PLAIN, 11))
         self.extender.response_text.setEditable(False)
@@ -2852,23 +2888,23 @@ class UIBuilder(Runnable):
         self.extender.response_text.setForeground(UIManager.getColor("TextArea.foreground") or Color.WHITE)
         res_scroll = JScrollPane(self.extender.response_text)
         res_scroll.setBorder(BorderFactory.createTitledBorder("Response"))
-        
+
         self.extender.traffic_split = JSplitPane(JSplitPane.HORIZONTAL_SPLIT, req_scroll, res_scroll)
         self.extender.traffic_split.setResizeWeight(0.5)
         self.extender.traffic_split.setContinuousLayout(True)
         self.extender.traffic_split.setBorder(BorderFactory.createEmptyBorder())
-        
+
         self.extender.request_panel.add(self.extender.traffic_split, BorderLayout.CENTER)
         self.extender.request_panel.setVisible(False)
-        
+
         self.extender.outer_split_pane = JSplitPane(JSplitPane.VERTICAL_SPLIT, self.extender.split_pane, self.extender.request_panel)
         self.extender.outer_split_pane.setResizeWeight(0.7)
         self.extender.outer_split_pane.setContinuousLayout(True)
         self.extender.outer_split_pane.setBorder(BorderFactory.createEmptyBorder())
-        
+
         self.extender.split_pane.setMinimumSize(Dimension(0, 0))
         self.extender.request_panel.setMinimumSize(Dimension(0, 0))
-        
+
         self.extender.tabbed_pane = JTabbedPane()
         self.extender.tabbed_pane.addChangeListener(lambda e: self.extender.on_tab_changed())
         self.extender.mainPanel.add(self.extender.tabbed_pane, BorderLayout.CENTER)
