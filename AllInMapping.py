@@ -1,8 +1,7 @@
 # -*- coding: utf-8 -*-
 from burp import IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExtensionStateListener
-from javax.swing import JPanel, JLabel, JTextArea, JTextField, JButton, JToggleButton, JScrollPane, JOptionPane, BorderFactory, UIManager, SwingUtilities, ImageIcon, JPopupMenu, JMenuItem, AbstractAction, KeyStroke, JComponent, JFileChooser, JCheckBox, JMenu, BoxLayout, Box, JSplitPane, JTable, JTabbedPane, ButtonGroup, ListSelectionModel, JTextPane
+from javax.swing import JPanel, JLabel, JTextArea, JTextField, JButton, JToggleButton, JScrollPane, JOptionPane, BorderFactory, UIManager, SwingUtilities, ImageIcon, JPopupMenu, JMenuItem, AbstractAction, KeyStroke, JComponent, JFileChooser, JCheckBox, JMenu, BoxLayout, Box, JSplitPane, JTable, JTabbedPane, ButtonGroup, ListSelectionModel
 from javax.swing.table import DefaultTableModel
-from javax.swing.text import SimpleAttributeSet, StyleConstants
 from java.awt import BorderLayout, FlowLayout, GridLayout, Color, BasicStroke, RenderingHints, Cursor, Toolkit, Font, Polygon, Dimension, CardLayout, Insets
 from java.awt.datatransfer import StringSelection, DataFlavor
 from java.awt.event import MouseAdapter, KeyEvent, KeyAdapter, FocusListener
@@ -1433,136 +1432,55 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
                     self.update_features_detail_table()
             JOptionPane.showMessageDialog(self.mainPanel, "Successfully added {} request(s) to Feature: {}".format(added_count, target_feature["name"]))
 
-    def get_editor_theme_colors(self):
-        bg = (UIManager.getColor("TextArea.background") or UIManager.getColor("TextPane.background")
-              or UIManager.getColor("Panel.background") or Color(43, 43, 43))
-        fg = (UIManager.getColor("TextArea.foreground") or UIManager.getColor("TextPane.foreground")
-              or UIManager.getColor("Label.foreground") or Color.WHITE)
-
-        luminance = (0.299 * bg.getRed() + 0.587 * bg.getGreen() + 0.114 * bg.getBlue())
-        is_dark = luminance < 128
-
-        if is_dark:
-            method_color = Color(11, 212, 87)
-            header_color = Color(17, 204, 212)
-        else:
-            method_color = Color(0, 128, 32)
-            header_color = Color(0, 96, 158)
-
-        return bg, fg, method_color, header_color
-
-    def set_highlighted_text(self, text_pane, text, is_request):
-        doc = text_pane.getStyledDocument()
-        doc.remove(0, doc.getLength())
-        if not text: return
-
-        bg_color, base_fg, method_color, header_color = self.get_editor_theme_colors()
-        text_pane.setBackground(bg_color)
-
-        attr_base = SimpleAttributeSet()
-        StyleConstants.setForeground(attr_base, base_fg)
-        StyleConstants.setFontFamily(attr_base, "SansSerif")
-        StyleConstants.setFontSize(attr_base, 11)
-
-        attr_method = SimpleAttributeSet(attr_base)
-        StyleConstants.setForeground(attr_method, method_color)
-
-        attr_header = SimpleAttributeSet(attr_base)
-        StyleConstants.setForeground(attr_header, header_color)
-
-        lines = text.split('\n')
-        if not lines: return
-
-        body_idx = -1
-        for i, line in enumerate(lines):
-            if line.strip() == "":
-                body_idx = i
-                break
-
-        headers_end = body_idx if body_idx != -1 else len(lines)
-        first_line = lines[0]
-        
-        if is_request:
-            parts = first_line.split(" ", 1)
-            if len(parts) == 2:
-                doc.insertString(doc.getLength(), parts[0] + " ", attr_method)
-                doc.insertString(doc.getLength(), parts[1].strip('\r\n') + "\n", attr_base)
-            else:
-                doc.insertString(doc.getLength(), first_line.strip('\r\n') + "\n", attr_base)
-        else:
-            doc.insertString(doc.getLength(), first_line.strip('\r\n') + "\n", attr_base)
-
-        for i in range(1, headers_end):
-            line = lines[i]
-            if ":" in line:
-                key, val = line.split(":", 1)
-                doc.insertString(doc.getLength(), key + ":", attr_header)
-                doc.insertString(doc.getLength(), val.strip('\r\n') + "\n", attr_base)
-            else:
-                doc.insertString(doc.getLength(), line.strip('\r\n') + "\n", attr_header)
-
-        if body_idx != -1:
-            body_text = "\n".join(lines[body_idx:])
-            doc.insertString(doc.getLength(), body_text, attr_base)
-
     def update_toolbar(self):
         has_selection = len(self.selected_nodes) > 0
         if hasattr(self, 'color_bar') and self.color_bar.isVisible() != has_selection:
             self.color_bar.setVisible(has_selection)
 
         if hasattr(self, 'request_panel'):
-            req_str = ""
-            res_str = ""
-            MAX_PREVIEW_LEN = 100000 
+            req_out = None
+            res_out = None
 
             if len(self.selected_nodes) > 0 and getattr(self, 'current_view_mode', 'map') != 'features':
-                node = list(self.selected_nodes)[0] 
-                
+                node = list(self.selected_nodes)[0]
+
                 req_bytes = None
                 res_bytes = None
-                
+
                 if hasattr(self, 'selected_method') and self.selected_method:
                     target_req = node.method_requests.get(self.selected_method)
                     if target_req:
                         req_bytes = target_req.getRequest()
                         res_bytes = target_req.getResponse()
-                
+
                 if not req_bytes and node.linked_request:
                     req_bytes = node.linked_request.getRequest()
                     res_bytes = node.linked_request.getResponse()
-                    
+
                 has_http_data = (len(node.statuses) > 0) or (req_bytes is not None) or (len(node.methods) > 0)
 
                 if not getattr(node, 'is_manual', False) and has_http_data:
-                    if req_bytes: 
-                        req_str = self.helpers.bytesToString(req_bytes).replace('\x00', '')
-                        if len(req_str) > MAX_PREVIEW_LEN: req_str = req_str[:MAX_PREVIEW_LEN] + "\n\n... [TRUNCATED] ..."
-                        req_str = req_str.replace('\r\n', '\n') 
+                    if req_bytes:
+                        req_out = req_bytes
                     else:
                         host, port, use_https, req = self.build_http_request(node)
-                        if req: 
-                            req_str = self.helpers.bytesToString(req).replace('\r\n', '\n')
-                            res_str = "[Preview not available - No linked request]"
-                    
-                    if res_bytes: 
-                        res_str = self.helpers.bytesToString(res_bytes).replace('\x00', '')
-                        if len(res_str) > MAX_PREVIEW_LEN: res_str = res_str[:MAX_PREVIEW_LEN] + "\n\n... [TRUNCATED] ..."
-                        res_str = res_str.replace('\r\n', '\n')
+                        if req:
+                            req_out = req
+                            res_out = self.helpers.stringToBytes("[Preview not available - No linked request]")
+
+                    if res_bytes:
+                        res_out = res_bytes
 
             elif getattr(self, 'current_view_mode', 'map') == 'features' and getattr(self, 'selected_feature_req', None):
                 f_req = self.selected_feature_req
                 if f_req.get("req_b64"):
-                    req_bytes = self.helpers.base64Decode(f_req["req_b64"])
-                    req_str = self.helpers.bytesToString(req_bytes).replace('\x00', '').replace('\r\n', '\n')
+                    req_out = self.helpers.base64Decode(f_req["req_b64"])
                 if f_req.get("res_b64"):
-                    res_bytes = self.helpers.base64Decode(f_req["res_b64"])
-                    res_str = self.helpers.bytesToString(res_bytes).replace('\x00', '').replace('\r\n', '\n')
+                    res_out = self.helpers.base64Decode(f_req["res_b64"])
 
-            if req_str or res_str:
-                self.set_highlighted_text(self.request_text, req_str, True)
-                self.request_text.setCaretPosition(0)
-                self.set_highlighted_text(self.response_text, res_str, False)
-                self.response_text.setCaretPosition(0)
+            if req_out or res_out:
+                self.request_editor.setMessage(req_out or self.helpers.stringToBytes(""), True)
+                self.response_editor.setMessage(res_out or self.helpers.stringToBytes(""), False)
                 if not self.request_panel.isVisible():
                     self.request_panel.setVisible(True)
                     if hasattr(self, 'outer_split_pane') and hasattr(self, 'mainPanel'):
@@ -3214,21 +3132,20 @@ class UIBuilder(Runnable):
 
         self.extender.request_panel.add(title_panel, BorderLayout.NORTH)
 
-        _editor_bg, _editor_fg, _m, _h = self.extender.get_editor_theme_colors()
+        # Native Burp message editors give us Pretty/Raw/Hex/Render tabs, syntax
+        # highlighting and search for free, matching whatever theme Burp is using -
+        # no need to hand-roll body formatting ourselves.
+        self.extender.request_editor = self.extender.callbacks.createMessageEditor(None, False)
+        req_panel = JPanel(BorderLayout())
+        req_panel.setBorder(BorderFactory.createTitledBorder("Request"))
+        req_panel.add(self.extender.request_editor.getComponent(), BorderLayout.CENTER)
 
-        self.extender.request_text = JTextPane()
-        self.extender.request_text.setEditable(False)
-        self.extender.request_text.setBackground(_editor_bg)
-        req_scroll = JScrollPane(self.extender.request_text)
-        req_scroll.setBorder(BorderFactory.createTitledBorder("Request"))
+        self.extender.response_editor = self.extender.callbacks.createMessageEditor(None, False)
+        res_panel = JPanel(BorderLayout())
+        res_panel.setBorder(BorderFactory.createTitledBorder("Response"))
+        res_panel.add(self.extender.response_editor.getComponent(), BorderLayout.CENTER)
 
-        self.extender.response_text = JTextPane()
-        self.extender.response_text.setEditable(False)
-        self.extender.response_text.setBackground(_editor_bg)
-        res_scroll = JScrollPane(self.extender.response_text)
-        res_scroll.setBorder(BorderFactory.createTitledBorder("Response"))
-
-        self.extender.traffic_split = JSplitPane(JSplitPane.HORIZONTAL_SPLIT, req_scroll, res_scroll)
+        self.extender.traffic_split = JSplitPane(JSplitPane.HORIZONTAL_SPLIT, req_panel, res_panel)
         self.extender.traffic_split.setResizeWeight(0.5)
         self.extender.traffic_split.setContinuousLayout(True)
         self.extender.traffic_split.setBorder(BorderFactory.createEmptyBorder())
