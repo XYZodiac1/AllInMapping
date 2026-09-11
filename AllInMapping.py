@@ -2561,30 +2561,40 @@ class UIBuilder(Runnable):
         loadScopeBtn.addActionListener(do_load_scope)
         topBar.add(loadScopeBtn)
 
-        saveProjBtn = JButton(u"Save to Project")
-        style_btn(saveProjBtn, bg=Color(43, 43, 43))
-        saveProjBtn.addActionListener(lambda e: self.extender.save_project_state(e))
-        topBar.add(saveProjBtn)
+        fileBtn = JButton(u"File ▾")
+        style_btn(fileBtn, bg=Color(43, 43, 43))
+        file_menu = JPopupMenu()
 
-        loadProjBtn = JButton(u"Load from Project")
-        style_btn(loadProjBtn, bg=Color(43, 43, 43))
-        loadProjBtn.addActionListener(lambda e: self.extender.load_project_state(e))
-        topBar.add(loadProjBtn)
+        saveProjItem = JMenuItem(u"Save to Project")
+        saveProjItem.addActionListener(lambda e: self.extender.save_project_state(e))
+        file_menu.add(saveProjItem)
 
-        exportJsonBtn = JButton(u"Export JSON")
-        style_btn(exportJsonBtn, bg=Color(43, 43, 43))
-        exportJsonBtn.addActionListener(lambda e: self.extender.export_workspace_json(e))
-        topBar.add(exportJsonBtn)
+        loadProjItem = JMenuItem(u"Load from Project")
+        loadProjItem.addActionListener(lambda e: self.extender.load_project_state(e))
+        file_menu.add(loadProjItem)
 
-        importJsonBtn = JButton(u"Import JSON")
-        style_btn(importJsonBtn, bg=Color(43, 43, 43))
-        importJsonBtn.addActionListener(lambda e: self.extender.import_workspace_json(e))
-        topBar.add(importJsonBtn)
+        file_menu.addSeparator()
 
-        exportExcelBtn = JButton(u"Export XLS")
-        style_btn(exportExcelBtn, bg=Color(43, 43, 43))
-        exportExcelBtn.addActionListener(lambda e: self.extender.export_excel(e))
-        topBar.add(exportExcelBtn)
+        exportJsonItem = JMenuItem(u"Export JSON")
+        exportJsonItem.addActionListener(lambda e: self.extender.export_workspace_json(e))
+        file_menu.add(exportJsonItem)
+
+        importJsonItem = JMenuItem(u"Import JSON")
+        importJsonItem.addActionListener(lambda e: self.extender.import_workspace_json(e))
+        file_menu.add(importJsonItem)
+
+        file_menu.addSeparator()
+
+        exportExcelItem = JMenuItem(u"Export XLS")
+        exportExcelItem.addActionListener(lambda e: self.extender.export_excel(e))
+        file_menu.add(exportExcelItem)
+
+        exportSvgItem = JMenuItem(u"Export SVG")
+        exportSvgItem.addActionListener(lambda e: self.extender.export_svg(e))
+        file_menu.add(exportSvgItem)
+
+        fileBtn.addActionListener(lambda e: file_menu.show(fileBtn, 0, fileBtn.getHeight()))
+        topBar.add(fileBtn)
 
         self.extender.hideTestedBtn = JToggleButton(u"Hide Tested")
         style_btn(self.extender.hideTestedBtn)
@@ -2817,7 +2827,7 @@ class UIBuilder(Runnable):
         s_panel.add(self.extender.hide_get_cb)
         add_sidebar_section("SETTINGS", s_panel)
 
-        a_panel = JPanel(GridLayout(3, 2, 8, 8))
+        a_panel = JPanel(GridLayout(2, 2, 8, 8))
         undoBtn = style_btn(JButton("Undo"))
         undoBtn.addActionListener(lambda e: self.extender.undo(e))
         a_panel.add(undoBtn)
@@ -2830,9 +2840,6 @@ class UIBuilder(Runnable):
         arrangeBtn = style_btn(JButton("Arrange"))
         arrangeBtn.addActionListener(lambda e: self.extender.auto_arrange(e))
         a_panel.add(arrangeBtn)
-        exportSvgBtn = style_btn(JButton("Export SVG"))
-        exportSvgBtn.addActionListener(lambda e: self.extender.export_svg(e))
-        a_panel.add(exportSvgBtn)
         add_sidebar_section("ACTIONS", a_panel)
 
         c_panel = JPanel(GridLayout(0, 2, 8, 8))
