@@ -1433,21 +1433,42 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
                     self.update_features_detail_table()
             JOptionPane.showMessageDialog(self.mainPanel, "Successfully added {} request(s) to Feature: {}".format(added_count, target_feature["name"]))
 
+    def get_editor_theme_colors(self):
+        bg = (UIManager.getColor("TextArea.background") or UIManager.getColor("TextPane.background")
+              or UIManager.getColor("Panel.background") or Color(43, 43, 43))
+        fg = (UIManager.getColor("TextArea.foreground") or UIManager.getColor("TextPane.foreground")
+              or UIManager.getColor("Label.foreground") or Color.WHITE)
+
+        luminance = (0.299 * bg.getRed() + 0.587 * bg.getGreen() + 0.114 * bg.getBlue())
+        is_dark = luminance < 128
+
+        if is_dark:
+            method_color = Color(11, 212, 87)
+            header_color = Color(17, 204, 212)
+        else:
+            method_color = Color(0, 128, 32)
+            header_color = Color(0, 96, 158)
+
+        return bg, fg, method_color, header_color
+
     def set_highlighted_text(self, text_pane, text, is_request):
         doc = text_pane.getStyledDocument()
         doc.remove(0, doc.getLength())
         if not text: return
 
+        bg_color, base_fg, method_color, header_color = self.get_editor_theme_colors()
+        text_pane.setBackground(bg_color)
+
         attr_base = SimpleAttributeSet()
-        StyleConstants.setForeground(attr_base, Color.WHITE)
+        StyleConstants.setForeground(attr_base, base_fg)
         StyleConstants.setFontFamily(attr_base, "SansSerif")
         StyleConstants.setFontSize(attr_base, 11)
 
         attr_method = SimpleAttributeSet(attr_base)
-        StyleConstants.setForeground(attr_method, Color(11, 212, 87))
+        StyleConstants.setForeground(attr_method, method_color)
 
         attr_header = SimpleAttributeSet(attr_base)
-        StyleConstants.setForeground(attr_header, Color(17, 204, 212)) 
+        StyleConstants.setForeground(attr_header, header_color)
 
         lines = text.split('\n')
         if not lines: return
@@ -3186,15 +3207,17 @@ class UIBuilder(Runnable):
 
         self.extender.request_panel.add(title_panel, BorderLayout.NORTH)
 
+        _editor_bg, _editor_fg, _m, _h = self.extender.get_editor_theme_colors()
+
         self.extender.request_text = JTextPane()
         self.extender.request_text.setEditable(False)
-        self.extender.request_text.setBackground(UIManager.getColor("TextArea.background") or Color(43, 43, 43))
+        self.extender.request_text.setBackground(_editor_bg)
         req_scroll = JScrollPane(self.extender.request_text)
         req_scroll.setBorder(BorderFactory.createTitledBorder("Request"))
 
         self.extender.response_text = JTextPane()
         self.extender.response_text.setEditable(False)
-        self.extender.response_text.setBackground(UIManager.getColor("TextArea.background") or Color(43, 43, 43))
+        self.extender.response_text.setBackground(_editor_bg)
         res_scroll = JScrollPane(self.extender.response_text)
         res_scroll.setBorder(BorderFactory.createTitledBorder("Response"))
 
