@@ -32,7 +32,7 @@ A highly interactive, visually-driven Burp Suite extension designed to streamlin
 2. Go to the `Extensions` tab.
 3. Click `Add`.
 4. Select `Extension Type: Python`.
-5. Locate and select the `MindMap.py` file.
+5. Locate and select the `AllInMapping.py` file.
 6. Click `Next` and the extension will load a new tab named **Visual MindMap**.
 
 ## 🎨 Themes
