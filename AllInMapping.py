@@ -169,7 +169,6 @@ class MindMapTableModel(DefaultTableModel):
     def __init__(self, extender):
         self.extender = extender
         self.base_cols = ["Method", "URL", "Endpoint", "Tested", "Privilege", "Note"]
-        # We now store a tuple of (node, method) for each row
         self.row_data_map = []
         DefaultTableModel.__init__(self, 0, len(self.base_cols) + len(self.extender.custom_columns))
 
@@ -325,15 +324,32 @@ class DeleteNodeAction(AbstractAction):
         elif self.extender.selected_nodes: 
             self.extender.delete_nodes(list(self.extender.selected_nodes)[0])
 
+class SendToFeatureAction(AbstractAction):
+    def __init__(self, extender): self.extender = extender
+    def actionPerformed(self, e):
+        if self.extender.selected_nodes:
+            SwingUtilities.invokeLater(lambda: self.extender.add_nodes_to_feature(list(self.extender.selected_nodes)))
+
 class CutAction(AbstractAction):
     def __init__(self, extender): self.extender = extender
     def actionPerformed(self, e): self.extender.cut_nodes()
 
+# Master action handles CTRL+R for ALL views cleanly
 class SendToRepeaterAction(AbstractAction):
     def __init__(self, extender): self.extender = extender
     def actionPerformed(self, e):
-        if len(self.extender.selected_nodes) == 1:
-            self.extender.send_to_repeater(list(self.extender.selected_nodes)[0])
+        mode = getattr(self.extender, 'current_view_mode', 'map')
+        if mode in ['map', 'grid']:
+            if len(self.extender.selected_nodes) == 1:
+                self.extender.send_to_repeater(list(self.extender.selected_nodes)[0])
+        elif mode == 'features':
+            if getattr(self.extender, 'selected_feature_req', None):
+                self.extender.send_feature_req_to_repeater(self.extender.selected_feature_req)
+            else:
+                row = self.extender.features_master_table.getSelectedRow()
+                if row >= 0:
+                    feature = self.extender.visible_features[row]
+                    self.extender.send_feature_to_repeater(feature)
 
 class SendToIntruderAction(AbstractAction):
     def __init__(self, extender): self.extender = extender
@@ -384,7 +400,15 @@ class GridMouseHandler(MouseAdapter):
         if row == -1: 
             self.extender.gridTable.clearSelection()
             self.extender.selected_nodes = set()
+            self.extender.selected_method = None
             self.extender.update_toolbar()
+        else:
+            if SwingUtilities.isLeftMouseButton(e):
+                if not self.extender.gridTable.isRowSelected(row):
+                    self.extender.gridTable.setRowSelectionInterval(row, row)
+                self.extender.selected_nodes = {self.extender.table_model.row_data_map[row][0]}
+                self.extender.selected_method = self.extender.table_model.row_data_map[row][1]
+                self.extender.update_toolbar()
 
     def check_popup(self, e):
         if e.isPopupTrigger() or SwingUtilities.isRightMouseButton(e):
@@ -394,12 +418,16 @@ class GridMouseHandler(MouseAdapter):
                     self.extender.gridTable.setRowSelectionInterval(row, row)
                 
                 selected_rows = self.extender.gridTable.getSelectedRows()
-                # Unpack the tuple: extract just the node
                 nodes = [self.extender.table_model.row_data_map[r][0] for r in selected_rows]
                 self.extender.selected_nodes = set(nodes)
+                
+                if len(selected_rows) == 1:
+                    self.extender.selected_method = self.extender.table_model.row_data_map[selected_rows[0]][1]
+                else:
+                    self.extender.selected_method = None
+                    
                 self.extender.update_toolbar()
                 
-                # Unpack the tuple: pass just the node to the context menu
                 node = self.extender.table_model.row_data_map[row][0]
                 self.extender.show_context_menu(e.getComponent(), e.getX(), e.getY(), node)
 
@@ -417,12 +445,21 @@ class FeatureMasterMouseHandler(MouseAdapter):
             self.extender.selected_feature_req = None
             self.extender.update_toolbar()
         else:
-            if e.getClickCount() == 1 and not SwingUtilities.isRightMouseButton(e):
-                feat = self.extender.visible_features[row]
-                self.extender.editing_feature = feat
-                self.extender.feature_note_area.setText(feat.get("notes", ""))
-                self.extender.feature_note_scroll.setVisible(True)
-                self.extender.feature_note_area.requestFocusInWindow()
+            if SwingUtilities.isLeftMouseButton(e):
+                if not self.extender.features_master_table.isRowSelected(row):
+                    self.extender.features_master_table.setRowSelectionInterval(row, row)
+                
+                self.extender.features_reqs_model.current_feature = self.extender.visible_features[row]
+                self.extender.update_features_detail_table()
+                self.extender.selected_feature_req = None
+                self.extender.update_toolbar()
+
+                if e.getClickCount() == 1:
+                    feat = self.extender.visible_features[row]
+                    self.extender.editing_feature = feat
+                    self.extender.feature_note_area.setText(feat.get("notes", ""))
+                    self.extender.feature_note_scroll.setVisible(True)
+                    self.extender.feature_note_area.requestFocusInWindow()
 
     def check_popup(self, e):
         if e.isPopupTrigger() or SwingUtilities.isRightMouseButton(e):
@@ -443,6 +480,12 @@ class FeatureMasterMouseHandler(MouseAdapter):
                     item.addActionListener(set_fp)
                     p_menu.add(item)
                 menu.add(p_menu)
+                
+                menu.addSeparator()
+                rep_item = JMenuItem("Send Feature to Repeater")
+                rep_item.addActionListener(lambda evt, r=row: self.extender.send_feature_to_repeater(self.extender.visible_features[r]))
+                menu.add(rep_item)
+                
                 menu.show(e.getComponent(), e.getX(), e.getY())
 
 class FeatureReqsMouseHandler(MouseAdapter):
@@ -455,6 +498,15 @@ class FeatureReqsMouseHandler(MouseAdapter):
             self.extender.features_reqs_table.clearSelection()
             self.extender.selected_feature_req = None
             self.extender.update_toolbar()
+        else:
+            if SwingUtilities.isLeftMouseButton(e):
+                if not self.extender.features_reqs_table.isRowSelected(row):
+                    self.extender.features_reqs_table.setRowSelectionInterval(row, row)
+                if self.extender.features_reqs_model.current_feature:
+                    self.extender.selected_feature_req = self.extender.features_reqs_model.current_feature["requests"][row]
+                else:
+                    self.extender.selected_feature_req = self.extender.recorded_reqs[row]
+                self.extender.update_toolbar()
         self.extender.close_feature_note()
 
     def check_popup(self, e):
@@ -480,6 +532,18 @@ class FeatureReqsMouseHandler(MouseAdapter):
                     item.addActionListener(set_rp)
                     p_menu.add(item)
                 menu.add(p_menu)
+                
+                menu.addSeparator()
+                rep_item = JMenuItem("Send to Repeater")
+                def send_req(evt, r=row):
+                    if self.extender.features_reqs_model.current_feature:
+                        req_data = self.extender.features_reqs_model.current_feature["requests"][r]
+                    else:
+                        req_data = self.extender.recorded_reqs[r]
+                    self.extender.send_feature_req_to_repeater(req_data)
+                rep_item.addActionListener(send_req)
+                menu.add(rep_item)
+                
                 menu.show(e.getComponent(), e.getX(), e.getY())
 
 class MapMouseHandler(MouseAdapter):
@@ -715,7 +779,6 @@ class MapMouseHandler(MouseAdapter):
                 if node:
                     self.extender.selected_method = None
                     self.extender.update_toolbar()
-
 
 class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExtensionStateListener):
     def registerExtenderCallbacks(self, callbacks):
@@ -1974,15 +2037,40 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
             if req: self.callbacks.sendToIntruder(host, port, use_https, req)
 
     def send_to_repeater(self, node):
-        if node.linked_request:
-            service = node.linked_request.getHttpService()
+        req_res = None
+        if getattr(self, 'selected_method', None):
+            req_res = node.method_requests.get(self.selected_method)
+        
+        if not req_res:
+            req_res = node.linked_request
+
+        if req_res:
+            service = req_res.getHttpService()
             self.callbacks.sendToRepeater(
                 service.getHost(), service.getPort(), (service.getProtocol().lower() == "https"),
-                node.linked_request.getRequest(), node.text
+                req_res.getRequest(), node.text
             )
         else:
             host, port, use_https, req = self.build_http_request(node)
             if req: self.callbacks.sendToRepeater(host, port, use_https, req, node.text)
+
+    def send_feature_req_to_repeater(self, req_data, tab_name=None):
+        req_b64 = req_data.get("req_b64")
+        svc_data = req_data.get("svc_data")
+        if not req_b64 or not svc_data: return
+        
+        req = self.helpers.base64Decode(req_b64)
+        name = tab_name if tab_name else req_data.get("url", "Feature Req")
+        
+        self.callbacks.sendToRepeater(
+            svc_data["host"], svc_data["port"], (svc_data["protocol"].lower() == "https"),
+            req, name
+        )
+
+    def send_feature_to_repeater(self, feature):
+        for idx, req_data in enumerate(feature.get("requests", [])):
+            tab_name = "{} - {}".format(feature["name"], idx + 1)
+            self.send_feature_req_to_repeater(req_data, tab_name)
 
     def do_active_scan(self, node):
         host, port, use_https, req = self.build_http_request(node)
@@ -2962,7 +3050,6 @@ class UIBuilder(Runnable):
         def del_row_action(e):
             rows = self.extender.gridTable.getSelectedRows()
             if rows:
-                # Update: get the node from the tuple at index 0
                 nodes_to_del = [self.extender.table_model.row_data_map[r][0] for r in rows]
                 for n in nodes_to_del:
                     self.extender.delete_nodes(n)
@@ -3206,7 +3293,7 @@ class UIBuilder(Runnable):
         # View 2: Grid View
         self.extender.table_model = MindMapTableModel(self.extender)
         self.extender.gridTable = JTable(self.extender.table_model)
-        self.extender.gridTable.setRowHeight(25)
+        self.extender.gridTable.setRowHeight(24)
         self.extender.gridTable.setFillsViewportHeight(True)
         self.extender.gridTable.getTableHeader().setFont(Font("SansSerif", Font.BOLD, 12))
         
@@ -3232,19 +3319,19 @@ class UIBuilder(Runnable):
             if e.getValueIsAdjusting(): return
             rows = self.extender.gridTable.getSelectedRows()
             if rows:
-                nodes = [self.extender.table_model.row_nodes[r] for r in rows if r < len(self.extender.table_model.row_nodes)]
+                nodes = [self.extender.table_model.row_data_map[r][0] for r in rows if r < len(self.extender.table_model.row_data_map)]
                 self.extender.selected_nodes = set(nodes)
             else:
                 self.extender.selected_nodes = set()
+                self.extender.selected_method = None
             self.extender.update_toolbar()
-        self.extender.gridTable.getSelectionModel().addListSelectionListener(row_selected)
 
         def grid_key_pressed(e):
             if e.getKeyCode() == KeyEvent.VK_DELETE:
                 if self.extender.gridTable.isEditing(): return
                 rows = self.extender.gridTable.getSelectedRows()
                 if rows:
-                    nodes_to_del = [self.extender.table_model.row_nodes[r] for r in rows]
+                    nodes_to_del = [self.extender.table_model.row_data_map[r][0] for r in rows]
                     for n in nodes_to_del:
                         self.extender.delete_nodes(n)
                     self.extender.populate_grid()
@@ -3470,27 +3557,9 @@ class UIBuilder(Runnable):
         input_map.put(KeyStroke.getKeyStroke(KeyEvent.VK_V, ctrl_mask), "paste_node")
         action_map.put("paste_node", paste_action)
 
-        repeater_action = SendToRepeaterAction(self.extender)
-        input_map.put(KeyStroke.getKeyStroke(KeyEvent.VK_R, ctrl_mask), "send_repeater")
-        action_map.put("send_repeater", repeater_action)
-
         intruder_action = SendToIntruderAction(self.extender)
         input_map.put(KeyStroke.getKeyStroke(KeyEvent.VK_I, ctrl_mask), "send_intruder")
         action_map.put("send_intruder", intruder_action)
-
-        main_input_map = self.extender.mainPanel.getInputMap(JComponent.WHEN_ANCESTOR_OF_FOCUSED_COMPONENT)
-        main_action_map = self.extender.mainPanel.getActionMap()
-        main_input_map.put(KeyStroke.getKeyStroke(KeyEvent.VK_R, ctrl_mask), "send_repeater")
-        main_action_map.put("send_repeater", repeater_action)
-        main_input_map.put(KeyStroke.getKeyStroke(KeyEvent.VK_I, ctrl_mask), "send_intruder")
-        main_action_map.put("send_intruder", intruder_action)
-
-        grid_input_map = self.extender.gridTable.getInputMap(JComponent.WHEN_ANCESTOR_OF_FOCUSED_COMPONENT)
-        grid_action_map = self.extender.gridTable.getActionMap()
-        grid_input_map.put(KeyStroke.getKeyStroke(KeyEvent.VK_R, ctrl_mask), "send_repeater")
-        grid_action_map.put("send_repeater", repeater_action)
-        grid_input_map.put(KeyStroke.getKeyStroke(KeyEvent.VK_I, ctrl_mask), "send_intruder")
-        grid_action_map.put("send_intruder", intruder_action)
 
         undo_action = UndoAction(self.extender)
         input_map.put(KeyStroke.getKeyStroke(KeyEvent.VK_Z, ctrl_mask), "undo_action")
@@ -3572,4 +3641,30 @@ class UIBuilder(Runnable):
 
         self.extender.callbacks.customizeUiComponent(self.extender.mainPanel)
         self.extender.callbacks.addSuiteTab(self.extender)
-        self.extender.callbacks.printOutput("AllInMapping Loaded, ready to mapping!")
+
+        # Global CTRL+R Binding (works universally across the UI based on view mode)
+        repeater_action = SendToRepeaterAction(self.extender)
+        main_input_map = self.extender.mainPanel.getInputMap(JComponent.WHEN_ANCESTOR_OF_FOCUSED_COMPONENT)
+        main_action_map = self.extender.mainPanel.getActionMap()
+        main_input_map.put(KeyStroke.getKeyStroke(KeyEvent.VK_R, ctrl_mask), "send_repeater")
+        main_action_map.put("send_repeater", repeater_action)
+        
+        send_feature_action = SendToFeatureAction(self.extender)
+        
+        # 1. Global Main Panel Binding
+        main_input_map.put(KeyStroke.getKeyStroke(KeyEvent.VK_G, ctrl_mask), "send_feature")
+        main_action_map.put("send_feature", send_feature_action)
+
+        # 2. Map Canvas Binding
+        canvas_in_map = self.extender.canvasScroll.getInputMap(JComponent.WHEN_ANCESTOR_OF_FOCUSED_COMPONENT)
+        canvas_act_map = self.extender.canvasScroll.getActionMap()
+        canvas_in_map.put(KeyStroke.getKeyStroke(KeyEvent.VK_G, ctrl_mask), "send_feature")
+        canvas_act_map.put("send_feature", send_feature_action)
+
+        # 3. Grid Table Binding
+        grid_input_map = self.extender.gridTable.getInputMap(JComponent.WHEN_ANCESTOR_OF_FOCUSED_COMPONENT)
+        grid_action_map = self.extender.gridTable.getActionMap()
+        grid_input_map.put(KeyStroke.getKeyStroke(KeyEvent.VK_G, ctrl_mask), "send_feature")
+        grid_action_map.put("send_feature", send_feature_action)
+
+        self.extender.callbacks.printOutput("AllInMapping Loaded, ready to map!")
