@@ -5,7 +5,6 @@ All In Mapping is a highly interactive, visually-driven Burp Suite extension bui
 ## 📋 Requirements
 
 Before installing, ensure you have the following set up in your Burp Suite environment:
-* **Burp Suite:** Professional or Community Edition.
 * **Jython Standalone:** Required to run Python extensions in Burp. 
   1. Download the `jython-standalone-x.x.x.jar` from the [official Jython website](https://www.jython.org/download).
   2. In Burp Suite, navigate to **Extensions** > **Extension Settings** > **Python Environment**.
@@ -13,19 +12,24 @@ Before installing, ensure you have the following set up in your Burp Suite envir
 
 ## 🛠️ Installation
 
-1. Go to the **Extensions** tab in Burp Suite.
-2. Click **Add** under the "Installed" tab.
-3. Set the **Extension Type** to **Python**.
-4. Click **Select file...** and choose your downloaded `AllInMapping.py` file.
-5. Click **Next**. The extension will load and a new tab named **Visual MindMap** will appear in your top navigation bar.
+1. Go to the **Extensions** tab in Burp Suite, set the **Extension Type** to **Python**.
+2. Choose your downloaded `AllInMapping.py` file.
 
 ## 💡 Examples of Use (Workflows)
 
 Here is how All In Mapping actively improves a standard pentest:
 
 * **Visualizing the Attack Surface (The MindMap):** As you proxy traffic through Burp, the extension automatically builds a branching visual tree of the application's structure (e.g., branching `/api/` into `/users/` and `/payments/`). You can visually spot orphaned endpoints, tag highly privileged routes in red, and draw relationship lines connecting an authentication endpoint to a restricted dashboard.
+<img width="1596" height="768" alt="image" src="https://github.com/user-attachments/assets/052d761a-d553-4b22-8f86-4f50456d89b0" />
+
+
 * **Methodology Tracking (Grid View):** You are auditing 50 different API endpoints for IDOR. Using the Grid View, you click **[+] Add Col** to create custom columns like "IDOR Tested" and "SQLi Checked". As you test each endpoint, you update the grid, keeping perfect track of your methodology coverage. When finished, you export the entire grid to `.xls` for your final report.
+<img width="1594" height="287" alt="image" src="https://github.com/user-attachments/assets/838ee414-245e-43af-a43c-ae2e273ce202" />
+
+
 * **Building Attack Chains (Features View):** You need to test a multi-step checkout vulnerability. You click **Record Feature**, name it "Checkout Race Condition", and perform the flow in your browser. The tool isolates and saves the exact sequence of requests (Add to Cart -> Apply Promo -> Process Payment). You can add custom notes to each step and assign privilege levels (e.g., "Low Privs"), creating a repeatable playbook.
+<img width="1598" height="772" alt="image" src="https://github.com/user-attachments/assets/129cf017-2121-4d72-8d79-6fddc9b3ace6" />
+
 
 ---
 
@@ -47,12 +51,6 @@ Here is how All In Mapping actively improves a standard pentest:
 * **Feature Recording:** Intercept and queue in-scope HTTP requests. Perfect for mapping complex functionality like password resets or logical workflows.
 * **Dedicated Notes & Privilege Mapping:** Each step in the recorded attack chain has an inline text editor and privilege dropdown for capturing parameters, payloads, or session requirements.
 * **Clean UI:** Disables clutter when active, providing a distraction-free split pane for managing functional attack paths.
-
-### 4. Quality of Life & Integrations
-* **Live Traffic Preview:** Selecting any node or feature request brings up an instant split-pane preview of the HTTP Request/Response, complete with syntax highlighting.
-* **Burp Suite Integration:** Send requests directly from nodes to *Repeater*, *Intruder*, or *Active Scan*. Use the global right-click menu anywhere in Burp to "Send to MindMap Playbook".
-* **Persistent State Tracking:** Features a robust 10-step Undo/Redo history.
-* **Export Options:** Save the workspace state natively to your Burp Project file, export/import as JSON, export to Obsidian Canvas (`.canvas`), or export the Map graphic as an SVG vector file.
 
 ---
 
