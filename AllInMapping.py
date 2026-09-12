@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 from burp import IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExtensionStateListener
-from javax.swing import JPanel, JLabel, JTextArea, JTextField, JButton, JToggleButton, JScrollPane, JOptionPane, BorderFactory, UIManager, SwingUtilities, ImageIcon, JPopupMenu, JMenuItem, AbstractAction, KeyStroke, JComponent, JFileChooser, JCheckBox, JMenu, BoxLayout, Box, JSplitPane, JTable, JTabbedPane, ButtonGroup, ListSelectionModel
-from javax.swing.table import DefaultTableModel
+from javax.swing import JPanel, JLabel, JTextArea, JTextField, JButton, JToggleButton, JScrollPane, JOptionPane, BorderFactory, UIManager, SwingUtilities, ImageIcon, JPopupMenu, JMenuItem, AbstractAction, KeyStroke, JComponent, JFileChooser, JCheckBox, JMenu, BoxLayout, Box, JSplitPane, JTable, JTabbedPane, ButtonGroup, ListSelectionModel, JComboBox, DefaultCellEditor
+from javax.swing.table import DefaultTableModel, DefaultTableCellRenderer, TableCellRenderer
 from java.awt import BorderLayout, FlowLayout, GridLayout, Color, BasicStroke, RenderingHints, Cursor, Toolkit, Font, Polygon, Dimension, CardLayout, Insets
 from java.awt.datatransfer import StringSelection, DataFlavor
 from java.awt.event import MouseAdapter, KeyEvent, KeyAdapter, FocusListener
@@ -16,6 +16,76 @@ import threading
 from java.util import ArrayList
 
 BURP_ORANGE = Color(229, 106, 37)
+
+def get_privilege_color(priv_level, is_selected, is_dark_theme):
+    if not priv_level: return None
+    
+    pl = priv_level.strip().lower()
+    if pl == "no auth":
+        base = Color(38, 65, 105) if is_dark_theme else Color(173, 216, 230) # Medium Blue
+    elif pl == "low privs":
+        base = Color(38, 90, 50) if is_dark_theme else Color(144, 238, 144) # Medium Green
+    elif pl == "high privs":
+        base = Color(115, 42, 42) if is_dark_theme else Color(255, 182, 193) # Medium Red
+    else:
+        # Custom Privilege
+        base = Color(32, 95, 105) if is_dark_theme else Color(224, 255, 255) # Medium Cyan
+
+    if is_selected:
+        return base.darker()
+    return base
+
+def create_privilege_editor():
+    combo = JComboBox(["", "No Auth", "Low Privs", "High Privs"])
+    combo.setEditable(True)
+    editor = DefaultCellEditor(combo)
+    editor.setClickCountToStart(1) # Start editing on single click
+    return editor
+
+class PrivilegeRowRenderer(DefaultTableCellRenderer):
+    def __init__(self, data_source_callback):
+        self.data_source_callback = data_source_callback
+        
+    def getTableCellRendererComponent(self, table, value, isSelected, hasFocus, row, column):
+        c = DefaultTableCellRenderer.getTableCellRendererComponent(self, table, value, isSelected, hasFocus, row, column)
+        priv = self.data_source_callback(row)
+        
+        is_dark = UIManager.getColor("Panel.background").getRed() < 128
+        bg_color = get_privilege_color(priv, isSelected, is_dark)
+        
+        if bg_color:
+            c.setBackground(bg_color)
+            if is_dark:
+                c.setForeground(Color.WHITE if not isSelected else table.getSelectionForeground())
+            else:
+                c.setForeground(Color.BLACK if not isSelected else table.getSelectionForeground())
+        else:
+            c.setBackground(table.getSelectionBackground() if isSelected else table.getBackground())
+            c.setForeground(table.getSelectionForeground() if isSelected else table.getForeground())
+            
+        return c
+
+class PrivilegeBoolRenderer(JCheckBox, TableCellRenderer):
+    def __init__(self, data_source_callback):
+        self.data_source_callback = data_source_callback
+        self.setHorizontalAlignment(JCheckBox.CENTER)
+        self.setOpaque(True)
+        
+    def getTableCellRendererComponent(self, table, value, isSelected, hasFocus, row, column):
+        if value is not None:
+            self.setSelected(bool(value))
+        else:
+            self.setSelected(False)
+            
+        priv = self.data_source_callback(row)
+        is_dark = UIManager.getColor("Panel.background").getRed() < 128
+        bg_color = get_privilege_color(priv, isSelected, is_dark)
+        
+        if bg_color:
+            self.setBackground(bg_color)
+        else:
+            self.setBackground(table.getSelectionBackground() if isSelected else table.getBackground())
+        return self
 
 class RestoredHttpService:
     def __init__(self, host, port, protocol):
@@ -54,6 +124,7 @@ class MindMapNode:
         self.content_lengths = set()
         self.severity = None 
         self.note = ""
+        self.privilege = ""
         self.custom_color = None
         self.status = "" 
         self.params = set()
@@ -97,12 +168,13 @@ class MindMapNode:
 class MindMapTableModel(DefaultTableModel):
     def __init__(self, extender):
         self.extender = extender
-        self.base_cols = ["Method", "URL", "Endpoint", "Tested", "Note"]
-        self.row_nodes = []
+        self.base_cols = ["Method", "URL", "Endpoint", "Tested", "Privilege", "Note"]
+        # We now store a tuple of (node, method) for each row
+        self.row_data_map = []
         DefaultTableModel.__init__(self, 0, len(self.base_cols) + len(self.extender.custom_columns))
 
     def getColumnCount(self):
-        if not hasattr(self, 'extender'): return 5
+        if not hasattr(self, 'extender'): return 6
         return len(self.base_cols) + len(self.extender.custom_columns)
 
     def getColumnName(self, col):
@@ -118,10 +190,11 @@ class MindMapTableModel(DefaultTableModel):
         return col >= 3
 
     def getValueAt(self, row, col):
-        if row >= len(self.row_nodes): return ""
-        node = self.row_nodes[row]
+        if row >= len(self.row_data_map): return ""
+        node, method = self.row_data_map[row]
+        
         if col == 0:
-            return ", ".join(sorted(list(node.methods)))
+            return method
         elif col == 1:
             try:
                 u = URL(node.get_full_url())
@@ -138,13 +211,15 @@ class MindMapTableModel(DefaultTableModel):
         elif col == 3:
             return Boolean(node.status == "Tested")
         elif col == 4:
+            return node.privilege
+        elif col == 5:
             return node.note
         else:
             col_name = self.getColumnName(col)
             return node.custom_cols.get(col_name, "")
 
     def setValueAt(self, val, row, col):
-        node = self.row_nodes[row]
+        node, method = self.row_data_map[row]
         if col == 3:
             if val: node.status = "Tested"
             else:
@@ -153,11 +228,15 @@ class MindMapTableModel(DefaultTableModel):
             if getattr(self.extender, 'current_view_mode', 'map') == 'map':
                 self.extender.render_map()
         elif col == 4:
+            node.privilege = unicode(val) if val else u""
+            self.extender.save_state()
+            self.extender.populate_grid()
+        elif col == 5:
             node.note = unicode(val) if val else u""
             self.extender.save_state()
             if getattr(self.extender, 'current_view_mode', 'map') == 'map':
                 self.extender.render_map()
-        elif col > 4:
+        elif col > 5:
             col_name = self.getColumnName(col)
             node.custom_cols[col_name] = unicode(val) if val else u""
             self.extender.save_state()
@@ -166,14 +245,14 @@ class MindMapTableModel(DefaultTableModel):
 class FeaturesMasterTableModel(DefaultTableModel):
     def __init__(self, extender):
         self.extender = extender
-        DefaultTableModel.__init__(self, ["Feature Name", "Reqs", "Tested"], 0)
+        DefaultTableModel.__init__(self, ["Feature Name", "Reqs", "Tested", "Privilege"], 0)
 
     def getColumnClass(self, col):
         if col == 2: return Boolean
         return String
 
     def isCellEditable(self, row, col):
-        return col == 0 or col == 2
+        return col == 0 or col >= 2
 
     def setValueAt(self, val, row, col):
         if col == 0:
@@ -186,21 +265,35 @@ class FeaturesMasterTableModel(DefaultTableModel):
             self.extender.save_state()
             if getattr(self.extender, 'hide_tested', False):
                 SwingUtilities.invokeLater(lambda: self.extender.update_features_master_table())
+        elif col == 3:
+            feat = self.extender.visible_features[row]
+            feat["privilege"] = unicode(val) if val else u""
+            self.extender.save_state()
+            self.extender.update_features_master_table()
+            
         DefaultTableModel.setValueAt(self, val, row, col)
 
 class FeatureReqsTableModel(DefaultTableModel):
     def __init__(self, extender):
         self.extender = extender
         self.current_feature = None
-        DefaultTableModel.__init__(self, ["Method", "URL", "Notes"], 0)
+        DefaultTableModel.__init__(self, ["Method", "URL", "Notes", "Privilege"], 0)
 
     def isCellEditable(self, row, col):
-        return col == 2
+        return col >= 2
 
     def setValueAt(self, val, row, col):
         if col == 2 and self.current_feature:
             self.current_feature["requests"][row]["notes"] = unicode(val) if val else u""
             self.extender.save_state()
+        elif col == 3:
+            if self.current_feature:
+                self.current_feature["requests"][row]["privilege"] = unicode(val) if val else u""
+            else:
+                self.extender.recorded_reqs[row]["privilege"] = unicode(val) if val else u""
+            self.extender.save_state()
+            self.extender.update_features_detail_table()
+            
         DefaultTableModel.setValueAt(self, val, row, col)
 
 class EditFieldListener(KeyAdapter, FocusListener):
@@ -301,12 +394,93 @@ class GridMouseHandler(MouseAdapter):
                     self.extender.gridTable.setRowSelectionInterval(row, row)
                 
                 selected_rows = self.extender.gridTable.getSelectedRows()
-                nodes = [self.extender.table_model.row_nodes[r] for r in selected_rows]
+                # Unpack the tuple: extract just the node
+                nodes = [self.extender.table_model.row_data_map[r][0] for r in selected_rows]
                 self.extender.selected_nodes = set(nodes)
                 self.extender.update_toolbar()
                 
-                node = self.extender.table_model.row_nodes[row]
+                # Unpack the tuple: pass just the node to the context menu
+                node = self.extender.table_model.row_data_map[row][0]
                 self.extender.show_context_menu(e.getComponent(), e.getX(), e.getY(), node)
+
+class FeatureMasterMouseHandler(MouseAdapter):
+    def __init__(self, extender): self.extender = extender
+    def mousePressed(self, e): self.check_popup(e)
+    def mouseReleased(self, e): self.check_popup(e)
+    def mouseClicked(self, e):
+        row = self.extender.features_master_table.rowAtPoint(e.getPoint())
+        if row == -1: 
+            self.extender.features_master_table.clearSelection()
+            self.extender.features_reqs_model.current_feature = None
+            self.extender.update_features_detail_table()
+            self.extender.close_feature_note()
+            self.extender.selected_feature_req = None
+            self.extender.update_toolbar()
+        else:
+            if e.getClickCount() == 1 and not SwingUtilities.isRightMouseButton(e):
+                feat = self.extender.visible_features[row]
+                self.extender.editing_feature = feat
+                self.extender.feature_note_area.setText(feat.get("notes", ""))
+                self.extender.feature_note_scroll.setVisible(True)
+                self.extender.feature_note_area.requestFocusInWindow()
+
+    def check_popup(self, e):
+        if e.isPopupTrigger() or SwingUtilities.isRightMouseButton(e):
+            row = self.extender.features_master_table.rowAtPoint(e.getPoint())
+            if row >= 0:
+                if not self.extender.features_master_table.isRowSelected(row):
+                    self.extender.features_master_table.setRowSelectionInterval(row, row)
+                menu = JPopupMenu()
+                p_menu = JMenu("Set Feature Privilege")
+                for p_level in ["Clear", "No Auth", "Low Privs", "High Privs"]:
+                    item = JMenuItem(p_level)
+                    val = "" if p_level == "Clear" else p_level
+                    def set_fp(evt, v=val, r=row):
+                        feat = self.extender.visible_features[r]
+                        feat["privilege"] = v
+                        self.extender.save_state()
+                        self.extender.update_features_master_table()
+                    item.addActionListener(set_fp)
+                    p_menu.add(item)
+                menu.add(p_menu)
+                menu.show(e.getComponent(), e.getX(), e.getY())
+
+class FeatureReqsMouseHandler(MouseAdapter):
+    def __init__(self, extender): self.extender = extender
+    def mousePressed(self, e): self.check_popup(e)
+    def mouseReleased(self, e): self.check_popup(e)
+    def mouseClicked(self, e):
+        row = self.extender.features_reqs_table.rowAtPoint(e.getPoint())
+        if row == -1: 
+            self.extender.features_reqs_table.clearSelection()
+            self.extender.selected_feature_req = None
+            self.extender.update_toolbar()
+        self.extender.close_feature_note()
+
+    def check_popup(self, e):
+        if e.isPopupTrigger() or SwingUtilities.isRightMouseButton(e):
+            row = self.extender.features_reqs_table.rowAtPoint(e.getPoint())
+            if row >= 0:
+                if not self.extender.features_reqs_table.isRowSelected(row):
+                    self.extender.features_reqs_table.setRowSelectionInterval(row, row)
+                menu = JPopupMenu()
+                p_menu = JMenu("Set Request Privilege")
+                for p_level in ["Clear", "No Auth", "Low Privs", "High Privs"]:
+                    item = JMenuItem(p_level)
+                    val = "" if p_level == "Clear" else p_level
+                    def set_rp(evt, v=val, r=row):
+                        if self.extender.features_reqs_model.current_feature:
+                            req = self.extender.features_reqs_model.current_feature["requests"][r]
+                            req["privilege"] = v
+                            self.extender.save_state()
+                        else:
+                            req = self.extender.recorded_reqs[r]
+                            req["privilege"] = v
+                        self.extender.update_features_detail_table()
+                    item.addActionListener(set_rp)
+                    p_menu.add(item)
+                menu.add(p_menu)
+                menu.show(e.getComponent(), e.getX(), e.getY())
 
 class MapMouseHandler(MouseAdapter):
     def __init__(self, extender):
@@ -601,6 +775,18 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
         t = threading.Thread(target=auto_save_loop)
         t.daemon = True 
         t.start()
+        
+    def apply_grid_renderer(self):
+        if not hasattr(self, 'gridTable'): return
+        # Update: get the node from the tuple at index 0
+        text_renderer = PrivilegeRowRenderer(lambda r: self.table_model.row_data_map[r][0].privilege if hasattr(self, 'table_model') and r < len(self.table_model.row_data_map) else "")
+        bool_renderer = PrivilegeBoolRenderer(lambda r: self.table_model.row_data_map[r][0].privilege if hasattr(self, 'table_model') and r < len(self.table_model.row_data_map) else "")
+        
+        for i in range(self.gridTable.getColumnCount()):
+            if i == 3: # Tested Column
+                self.gridTable.getColumnModel().getColumn(i).setCellRenderer(bool_renderer)
+            else:
+                self.gridTable.getColumnModel().getColumn(i).setCellRenderer(text_renderer)
 
     def extensionUnloaded(self):
         self.unloaded = True
@@ -810,6 +996,7 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
                     xml_data.append('   <Column ss:Width="300"/>') 
                     xml_data.append('   <Column ss:Width="100"/>')
                     xml_data.append('   <Column ss:Width="60"/>')  
+                    xml_data.append('   <Column ss:Width="80"/>')  
                     xml_data.append('   <Column ss:Width="200"/>') 
 
                     xml_data.append('   <Row>')
@@ -817,6 +1004,7 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
                     xml_data.append('    <Cell ss:StyleID="HeaderL"><Data ss:Type="String">URL</Data></Cell>')
                     xml_data.append('    <Cell ss:StyleID="HeaderL"><Data ss:Type="String">Endpoint</Data></Cell>')
                     xml_data.append('    <Cell ss:StyleID="HeaderL"><Data ss:Type="String">Tested</Data></Cell>')
+                    xml_data.append('    <Cell ss:StyleID="HeaderL"><Data ss:Type="String">Privilege</Data></Cell>')
                     xml_data.append('    <Cell ss:StyleID="HeaderR"><Data ss:Type="String">Notes</Data></Cell>')
                     xml_data.append('   </Row>')
 
@@ -838,14 +1026,15 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
                                 ep_clean = endpoint.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
                                 meths = ", ".join(node.methods)
                                 nts = node.note.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-                                rows_data.append((meths, full_url, ep_clean, is_tested, nts))
+                                privs = getattr(node, 'privilege', "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                                rows_data.append((meths, full_url, ep_clean, is_tested, privs, nts))
 
                         for child in node.children:
                             traverse_excel(child)
 
                     traverse_excel(root)
 
-                    for idx, (meths, full_url, ep_clean, is_tested, nts) in enumerate(rows_data):
+                    for idx, (meths, full_url, ep_clean, is_tested, privs, nts) in enumerate(rows_data):
                         is_last = (idx == len(rows_data) - 1)
                         if is_last:
                             style_L = "BotTestL" if is_tested else "BotL"
@@ -861,6 +1050,7 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
                         xml_data.append('    <Cell ss:StyleID="{}"><Data ss:Type="String">{}</Data></Cell>'.format(style_L, full_url))
                         xml_data.append('    <Cell ss:StyleID="{}"><Data ss:Type="String">{}</Data></Cell>'.format(style_L, ep_clean))
                         xml_data.append('    <Cell ss:StyleID="{}"><Data ss:Type="String">{}</Data></Cell>'.format(style_L, tested_str))
+                        xml_data.append('    <Cell ss:StyleID="{}"><Data ss:Type="String">{}</Data></Cell>'.format(style_L, privs))
                         xml_data.append('    <Cell ss:StyleID="{}"><Data ss:Type="String">{}</Data></Cell>'.format(style_R, nts))
                         xml_data.append('   </Row>')
 
@@ -927,21 +1117,12 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
         if not filepath.endswith(".canvas"):
             filepath += ".canvas"
 
-        # Obsidian canvas cards need a lot more room than the compact map labels,
-        # so positions/sizes are scaled up from the mind-map layout rather than
-        # copied 1:1 - it's a readable starting layout, not pixel-perfect.
         SCALE = 2.0
 
         def hex_color(c):
             if not c: return None
             return "#{:02x}{:02x}{:02x}".format(c.getRed(), c.getGreen(), c.getBlue())
 
-        # Mirrors the priority used when painting the map itself (draw_node): a manual
-        # fill color always wins since it's a deliberate per-node choice, then the
-        # automatic status border color, then severity. Obsidian's canvas format takes
-        # an arbitrary "#rrggbb" hex per node (the 1-6 numbers are just UI presets, not
-        # a hard limit), so every distinct shade in the graph - e.g. two different
-        # greens - stays distinct instead of collapsing onto a shared preset swatch.
         STATUS_HEX = {
             "Vulnerable": "#f50000",
             "Tested": "#00f500",
@@ -950,9 +1131,6 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
         SEVERITY_HEX = {
             "High": "#ef4444", "Medium": "#f97316", "Low": "#eab308", "Information": "#3b82f6",
         }
-        # Same per-depth cycling palettes draw_node()/export_svg() use for the border
-        # color of ordinary nodes (the one actually visible on most nodes, since status
-        # and severity are usually unset) - without this, everything exports colorless.
         THEME_PALETTES = {
             "Light": ["#bd93f9", "#50fa7b", "#8be9fd", "#ff79c6", "#f1fa8c", "#ffb86c"],
             "Synthwave": ["#d2a8ff", "#39bae6", "#aad94c", "#ffb454", "#f07178", "#59c2ff"],
@@ -984,6 +1162,8 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
                 lines.append(u"**Statuses:** " + u", ".join(str(s) for s in sorted(node.statuses)))
             if node.status:
                 lines.append(u"**Status:** " + node.status)
+            if getattr(node, 'privilege', ""):
+                lines.append(u"**Privilege:** " + node.privilege)
             if node.params:
                 lines.append(u"**Params:** " + u", ".join(sorted(node.params)))
             if node.note:
@@ -1294,6 +1474,7 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
                     "method": info.getMethod(),
                     "url": unicode(info.getUrl()),
                     "notes": "",
+                    "privilege": "",
                     "req_b64": req_b64,
                     "res_b64": res_b64,
                     "svc_data": svc_data
@@ -1423,6 +1604,9 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
 
         if hasattr(self, 'features_master_model'):
             self.update_features_master_table()
+            
+        if hasattr(self, 'gridTable'):
+            self.apply_grid_renderer()
 
         if self.activeRoot:
             self.auto_arrange(None)
@@ -1522,6 +1706,7 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
                 "name": new_name.strip(),
                 "requests": [],
                 "notes": "",
+                "privilege": "",
                 "tested": False
             }
             self.features.append(target_feature)
@@ -1583,6 +1768,7 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
                         "method": method,
                         "url": node.get_full_url(),
                         "notes": "",
+                        "privilege": getattr(node, 'privilege', ""),
                         "req_b64": req_b64,
                         "res_b64": res_b64,
                         "svc_data": svc_data
@@ -1595,7 +1781,6 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
                 self.update_features_master_table()
                 if hasattr(self, 'features_reqs_model') and self.features_reqs_model.current_feature == target_feature:
                     self.update_features_detail_table()
-            JOptionPane.showMessageDialog(self.mainPanel, "Successfully added {} request(s) to Feature: {}".format(added_count, target_feature["name"]))
 
     def update_toolbar(self):
         has_selection = len(self.selected_nodes) > 0
@@ -1667,6 +1852,12 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
             n.custom_color = final_color
         self.auto_arrange(None)
 
+    def set_node_privilege(self, priv):
+        self.save_state()
+        for n in self.selected_nodes: 
+            n.privilege = priv
+        self.auto_arrange(None)
+
     def show_context_menu(self, component, x, y, node):
         menu = JPopupMenu()
         sel_count = len(self.selected_nodes)
@@ -1687,6 +1878,15 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
         status_menu.add(st_vuln)
 
         menu.add(status_menu)
+        
+        priv_menu = JMenu("Set Privilege Level" + suffix)
+        for p_level in ["Clear", "No Auth", "Low Privs", "High Privs"]:
+            item = JMenuItem(p_level)
+            val = "" if p_level == "Clear" else p_level
+            item.addActionListener(lambda e, v=val: self.set_node_privilege(v))
+            priv_menu.add(item)
+        menu.add(priv_menu)
+        
         menu.addSeparator()
         copy_item = JMenuItem("Copy URL(s)" + suffix)
         copy_item.addActionListener(lambda e: self.copy_node_url(node))
@@ -1888,7 +2088,8 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
             "methods": [unicode(m) for m in node.methods], 
             "statuses": [int(s) for s in node.statuses], 
             "content_lengths": [int(c) for c in node.content_lengths],
-            "severity": node.severity, "note": node.note, "custom_color": self.serialize_color(node.custom_color),
+            "severity": node.severity, "note": node.note, "privilege": getattr(node, 'privilege', ""), 
+            "custom_color": self.serialize_color(node.custom_color),
             "status": node.status, 
             "params": [unicode(p) for p in node.params],
             "collapsed": getattr(node, 'collapsed', False), 
@@ -1914,6 +2115,7 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
         node.content_lengths = set(data.get("content_lengths", []))
         node.severity = data.get("severity", None)
         node.note = data.get("note", "")
+        node.privilege = data.get("privilege", "")
         node.custom_color = self.deserialize_color(data.get("custom_color", None))
 
         node.status = data.get("status", "")
@@ -2093,7 +2295,7 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
             if getattr(self, 'hide_tested', False) and f.get("tested", False):
                 continue
             self.visible_features.append(f)
-            self.features_master_model.addRow([f["name"], str(len(f["requests"])), Boolean(f.get("tested", False))])
+            self.features_master_model.addRow([f["name"], str(len(f["requests"])), Boolean(f.get("tested", False)), f.get("privilege", "")])
 
     def update_features_detail_table(self):
         self.features_reqs_model.setRowCount(0)
@@ -2104,12 +2306,12 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
             reqs = self.recorded_reqs
 
         for r in reqs:
-            self.features_reqs_model.addRow([r["method"], r["url"], r["notes"]])
+            self.features_reqs_model.addRow([r["method"], r["url"], r.get("notes", ""), r.get("privilege", "")])
 
     def populate_grid(self):
         if not hasattr(self, 'table_model'): return
         self.table_model.setRowCount(0)
-        self.table_model.row_nodes = []
+        self.table_model.row_data_map = []
         if not self.activeRoot: return
 
         filter_method = ""
@@ -2123,16 +2325,20 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
 
             if node != self.activeRoot:
                 if not getattr(node, 'is_manual', False) and has_http_data:
-                    match = True
-                    if filter_method:
-                        if not any(filter_method in m for m in node.methods):
-                            match = False
+                    # If the node has methods, split into multiple rows
+                    methods_to_display = sorted(list(node.methods)) if node.methods else ["N/A"]
                     
-                    if match:
-                        self.table_model.row_nodes.append(node)
-                        row_data = ["", "", "", False, ""]
-                        for _ in self.custom_columns: row_data.append("")
-                        self.table_model.addRow(row_data)
+                    for m in methods_to_display:
+                        match = True
+                        if filter_method:
+                            if filter_method not in m:
+                                match = False
+                        
+                        if match:
+                            self.table_model.row_data_map.append((node, m))
+                            row_data = ["", "", "", False, "", ""]
+                            for _ in self.custom_columns: row_data.append("")
+                            self.table_model.addRow(row_data)
 
             if getattr(node, 'collapsed', False): return 
 
@@ -2173,12 +2379,22 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
         tab_comp.setOpaque(False)
         tab_comp.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)) 
 
+        # 1. Shrink font and margins
         lbl = JLabel(host)
-        lbl.setBorder(BorderFactory.createEmptyBorder(5, 10, 5, 10)) 
+        lbl.setFont(Font("SansSerif", Font.PLAIN, 11))
+        lbl.setBorder(BorderFactory.createEmptyBorder(0, 8, 0, 8)) 
+        
+        # 2. Strip the default bulky borders off the hidden text field
         txt = JTextField(host, 15)
+        txt.setFont(Font("SansSerif", Font.PLAIN, 11))
+        txt.setBorder(BorderFactory.createEmptyBorder(0, 2, 0, 2))
 
         tab_comp.add(lbl, "label")
         tab_comp.add(txt, "edit")
+
+        # 3. FORCE the height of the tab to be strictly 20 pixels tall
+        pref_width = tab_comp.getPreferredSize().width
+        tab_comp.setPreferredSize(Dimension(pref_width, 10))
 
         def handle_mouse_click(e):
             tab_idx = self.tabbed_pane.indexOfTabComponent(tab_comp)
@@ -2719,6 +2935,7 @@ class UIBuilder(Runnable):
             if name and name.strip():
                 self.extender.custom_columns.append(name.strip())
                 self.extender.table_model.addColumn(name.strip())
+                self.extender.apply_grid_renderer()
                 self.extender.save_state()
         addColBtn.addActionListener(add_col_action)
         self.extender.grid_controls_panel.add(addColBtn)
@@ -2734,6 +2951,7 @@ class UIBuilder(Runnable):
                 self.extender.table_model.setColumnCount(0)
                 for c in self.extender.table_model.base_cols + self.extender.custom_columns:
                     self.extender.table_model.addColumn(c)
+                self.extender.apply_grid_renderer()
                 self.extender.populate_grid()
                 self.extender.save_state()
         remColBtn.addActionListener(rem_col_action)
@@ -2744,7 +2962,8 @@ class UIBuilder(Runnable):
         def del_row_action(e):
             rows = self.extender.gridTable.getSelectedRows()
             if rows:
-                nodes_to_del = [self.extender.table_model.row_nodes[r] for r in rows]
+                # Update: get the node from the tuple at index 0
+                nodes_to_del = [self.extender.table_model.row_data_map[r][0] for r in rows]
                 for n in nodes_to_del:
                     self.extender.delete_nodes(n)
                 self.extender.populate_grid()
@@ -2993,9 +3212,21 @@ class UIBuilder(Runnable):
         
         self.extender.gridTable.getColumnModel().getColumn(0).setMinWidth(60)
         self.extender.gridTable.getColumnModel().getColumn(0).setMaxWidth(100)
+        
         self.extender.gridTable.getColumnModel().getColumn(3).setMinWidth(40)
-        self.extender.gridTable.getColumnModel().getColumn(3).setMaxWidth(50)
-        self.extender.gridTable.getColumnModel().getColumn(4).setPreferredWidth(250)
+        self.extender.gridTable.getColumnModel().getColumn(3).setMaxWidth(60)
+        
+        priv_col = self.extender.gridTable.getColumnModel().getColumn(4)
+        priv_col.setMinWidth(90)
+        priv_col.setMaxWidth(130)
+        priv_col.setPreferredWidth(110)
+        priv_col.setCellEditor(create_privilege_editor())
+        
+        note_col = self.extender.gridTable.getColumnModel().getColumn(5)
+        note_col.setPreferredWidth(250)
+
+        # Apply Checkbox + Color Renderer
+        self.extender.apply_grid_renderer()
 
         def row_selected(e):
             if e.getValueIsAdjusting(): return
@@ -3060,6 +3291,7 @@ class UIBuilder(Runnable):
                     "name": name.strip(),
                     "requests": list(self.extender.recorded_reqs),
                     "notes": "",
+                    "privilege": "",
                     "tested": False
                 }
                 self.extender.features.append(new_feat)
@@ -3093,15 +3325,32 @@ class UIBuilder(Runnable):
         self.extender.features_master_table = JTable(self.extender.features_master_model)
         self.extender.features_master_table.setSelectionMode(ListSelectionModel.SINGLE_SELECTION)
         self.extender.features_master_table.setFillsViewportHeight(True)
+        self.extender.features_master_table.setRowHeight(25)
 
         feat_name_col = self.extender.features_master_table.getColumnModel().getColumn(0)
         feat_name_col.setPreferredWidth(180)
-
+        
         feat_reqs_col = self.extender.features_master_table.getColumnModel().getColumn(1)
         feat_reqs_col.setMaxWidth(40)
         
         feat_tested_col = self.extender.features_master_table.getColumnModel().getColumn(2)
-        feat_tested_col.setMaxWidth(50)
+        feat_tested_col.setMaxWidth(60)
+        
+        feat_priv_col = self.extender.features_master_table.getColumnModel().getColumn(3)
+        feat_priv_col.setMinWidth(90)
+        feat_priv_col.setMaxWidth(130)
+        feat_priv_col.setPreferredWidth(110)
+        feat_priv_col.setCellEditor(create_privilege_editor())
+
+        # Apply Feature Master Renderer
+        feat_master_text_renderer = PrivilegeRowRenderer(lambda r: self.extender.visible_features[r].get("privilege", "") if r < len(self.extender.visible_features) else "")
+        feat_master_bool_renderer = PrivilegeBoolRenderer(lambda r: self.extender.visible_features[r].get("privilege", "") if r < len(self.extender.visible_features) else "")
+        
+        for i in range(self.extender.features_master_table.getColumnCount()):
+            if i == 2:
+                self.extender.features_master_table.getColumnModel().getColumn(i).setCellRenderer(feat_master_bool_renderer)
+            else:
+                self.extender.features_master_table.getColumnModel().getColumn(i).setCellRenderer(feat_master_text_renderer)
 
         self.extender.feature_note_area = JTextArea()
         self.extender.feature_note_area.setLineWrap(True)
@@ -3125,26 +3374,7 @@ class UIBuilder(Runnable):
             self.extender.feature_note_scroll.setVisible(False)
 
         self.extender.close_feature_note = close_feature_note
-
-        def feat_master_mouse_clicked(e):
-            row = self.extender.features_master_table.rowAtPoint(e.getPoint())
-            if row == -1: 
-                self.extender.features_master_table.clearSelection()
-                self.extender.features_reqs_model.current_feature = None
-                self.extender.update_features_detail_table()
-                self.extender.close_feature_note()
-                self.extender.selected_feature_req = None
-                self.extender.update_toolbar()
-            else:
-                # Still show notes on single click if needed
-                if e.getClickCount() == 1:
-                    feat = self.extender.visible_features[row]
-                    self.extender.editing_feature = feat
-                    self.extender.feature_note_area.setText(feat.get("notes", ""))
-                    self.extender.feature_note_scroll.setVisible(True)
-                    self.extender.feature_note_area.requestFocusInWindow()
-
-        self.extender.features_master_table.addMouseListener(type("MasterMouseListener", (MouseAdapter,), {"mouseClicked": lambda s, e: feat_master_mouse_clicked(e)})())
+        self.extender.features_master_table.addMouseListener(FeatureMasterMouseHandler(self.extender))
 
         def feat_master_selected(e):
             if e.getValueIsAdjusting(): return
@@ -3157,11 +3387,29 @@ class UIBuilder(Runnable):
         self.extender.features_reqs_model = FeatureReqsTableModel(self.extender)
         self.extender.features_reqs_table = JTable(self.extender.features_reqs_model)
         self.extender.features_reqs_table.setFillsViewportHeight(True)
+        self.extender.features_reqs_table.setRowHeight(25)
 
         method_col = self.extender.features_reqs_table.getColumnModel().getColumn(0)
         method_col.setMinWidth(65)
         method_col.setMaxWidth(85)
         method_col.setPreferredWidth(70)
+        
+        req_priv_col = self.extender.features_reqs_table.getColumnModel().getColumn(3)
+        req_priv_col.setMinWidth(90)
+        req_priv_col.setMaxWidth(130)
+        req_priv_col.setPreferredWidth(110)
+        req_priv_col.setCellEditor(create_privilege_editor())
+
+        def get_feat_req_priv(r):
+            if self.extender.features_reqs_model.current_feature:
+                reqs = self.extender.features_reqs_model.current_feature["requests"]
+                if r < len(reqs): return reqs[r].get("privilege", "")
+            return ""
+
+        # Apply Feature Reqs Renderer (no boolean columns here)
+        feat_req_renderer = PrivilegeRowRenderer(get_feat_req_priv)
+        for i in range(self.extender.features_reqs_table.getColumnCount()):
+            self.extender.features_reqs_table.getColumnModel().getColumn(i).setCellRenderer(feat_req_renderer)
 
         def feat_req_selected(e):
             if e.getValueIsAdjusting(): return
@@ -3173,16 +3421,7 @@ class UIBuilder(Runnable):
                     self.extender.selected_feature_req = self.extender.recorded_reqs[row]
                 self.extender.update_toolbar()
         self.extender.features_reqs_table.getSelectionModel().addListSelectionListener(feat_req_selected)
-
-        def feat_req_mouse_clicked(e):
-            row = self.extender.features_reqs_table.rowAtPoint(e.getPoint())
-            if row == -1: 
-                self.extender.features_reqs_table.clearSelection()
-                self.extender.selected_feature_req = None
-                self.extender.update_toolbar()
-            self.extender.close_feature_note()
-
-        self.extender.features_reqs_table.addMouseListener(type("ReqMouseListener", (MouseAdapter,), {"mouseClicked": lambda s, e: feat_req_mouse_clicked(e)})())
+        self.extender.features_reqs_table.addMouseListener(FeatureReqsMouseHandler(self.extender))
 
         def feat_req_key_pressed(e):
             if e.getKeyCode() == KeyEvent.VK_DELETE:
@@ -3301,9 +3540,6 @@ class UIBuilder(Runnable):
 
         self.extender.request_panel.add(title_panel, BorderLayout.NORTH)
 
-        # Native Burp message editors give us Pretty/Raw/Hex/Render tabs, syntax
-        # highlighting and search for free, matching whatever theme Burp is using -
-        # no need to hand-roll body formatting ourselves.
         self.extender.request_editor = self.extender.callbacks.createMessageEditor(None, False)
         req_panel = JPanel(BorderLayout())
         req_panel.setBorder(BorderFactory.createTitledBorder("Request"))
@@ -3323,7 +3559,6 @@ class UIBuilder(Runnable):
         self.extender.request_panel.setVisible(False)
 
         self.extender.outer_split_pane = JSplitPane(JSplitPane.VERTICAL_SPLIT, self.extender.split_pane, self.extender.request_panel)
-        # 0.40 Resize weight to increase the default height of the traffic preview to twice its size.
         self.extender.outer_split_pane.setResizeWeight(0.40)
         self.extender.outer_split_pane.setContinuousLayout(True)
         self.extender.outer_split_pane.setBorder(BorderFactory.createEmptyBorder())
@@ -3337,4 +3572,4 @@ class UIBuilder(Runnable):
 
         self.extender.callbacks.customizeUiComponent(self.extender.mainPanel)
         self.extender.callbacks.addSuiteTab(self.extender)
-        self.extender.callbacks.printOutput("MindMap Workspace loaded. Custom Grid Columns & Feature mapping enabled!")
+        self.extender.callbacks.printOutput("AllInMapping Loaded, ready to mapping!")
