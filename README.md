@@ -1,6 +1,6 @@
 # All In Mapping (Burp Suite Extension)
 
-All In Mapping is a highly interactive, visually-driven Burp Suite extension built to streamline web application pentesting and bug bounty workflows. Instead of relying entirely on Burp's default flat-list site map, this tool acts as your central command center—transforming raw HTTP traffic into dynamic visual nodes, customizable data grids, and recorded attack chains. It helps you visualize complex application logic, track your testing coverage, and build comprehensive attack playbooks without ever leaving Burp Suite.
+All In Mapping is a highly interactive, visually-driven Burp Suite extension built to streamline web application pentesting and bug bounty workflows. It helps you visualize complex application logic, track your testing coverage, and build comprehensive attack playbooks without ever leaving Burp Suite.
 
 ## 📋 Requirements
 
@@ -19,7 +19,7 @@ Before installing, ensure you have the following set up in your Burp Suite envir
 
 Here is how All In Mapping actively improves a standard pentest:
 
-* **Visualizing the Attack Surface (The MindMap):** As you proxy traffic through Burp, the extension automatically builds a branching visual tree of the application's structure (e.g., branching `/api/` into `/users/` and `/payments/`). You can visually spot orphaned endpoints, tag highly privileged routes in red, and draw relationship lines connecting an authentication endpoint to a restricted dashboard.
+* **Visualizing the Attack Surface (The MindMap):** As you proxy traffic through Burp, the extension automatically builds a branching visual tree of the application's structure (e.g., branching `/api/` into `/users/` and `/payments/`). You can visually spot endpoints, tag highly privileged routes in red, and draw relationship lines connecting an authentication endpoint to a restricted dashboard.
 <img width="1596" height="768" alt="image" src="https://github.com/user-attachments/assets/052d761a-d553-4b22-8f86-4f50456d89b0" />
 
 
