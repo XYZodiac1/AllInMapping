@@ -1567,7 +1567,7 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
         if is_new_data and targetRoot == self.activeRoot:
             self.auto_arrange(None)
 
-    def getTabCaption(self): return "Visual MindMap"
+    def getTabCaption(self): return "AllInMapping"
     def getUiComponent(self): return self.mainPanel
 
     def get_full_state(self):
