@@ -2,7 +2,7 @@
 from burp import IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExtensionStateListener
 from javax.swing import JPanel, JLabel, JTextArea, JTextField, JButton, JToggleButton, JScrollPane, JOptionPane, BorderFactory, UIManager, SwingUtilities, ImageIcon, JPopupMenu, JMenuItem, AbstractAction, KeyStroke, JComponent, JFileChooser, JCheckBox, JMenu, BoxLayout, Box, JSplitPane, JTable, JTabbedPane, ButtonGroup, ListSelectionModel, JComboBox, DefaultCellEditor, JDialog
 from javax.swing.table import DefaultTableModel, DefaultTableCellRenderer, TableCellRenderer
-from java.awt import BorderLayout, FlowLayout, GridLayout, Color, BasicStroke, RenderingHints, Cursor, Toolkit, Font, Polygon, Dimension, CardLayout, Insets
+from java.awt import BorderLayout, FlowLayout, GridLayout, Color, BasicStroke, RenderingHints, Cursor, Toolkit, Font, Polygon, Dimension, CardLayout, Insets, Rectangle
 from java.awt.datatransfer import StringSelection, DataFlavor
 from java.awt.event import MouseAdapter, KeyEvent, KeyAdapter, FocusListener
 from java.awt.geom import Path2D
@@ -823,8 +823,13 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
         self.visible_features = []
         self.is_recording_feature = False
         self.recorded_reqs = []
-        self.selected_feature_req = None 
+        self.selected_feature_req = None
         self.current_view_mode = "map"
+
+        self.search_matches = []
+        self.search_query = ""
+        self.search_root = None
+        self.search_index = -1
 
         self.internal_clipboard = []
         self.last_copied_text = ""
@@ -1492,6 +1497,118 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
             res = self.find_node_by_id(child, search_id)
             if res: return res
         return None
+
+    def perform_search(self, event=None):
+        if not hasattr(self, 'search_field') or not self.activeRoot: return
+        query = self.search_field.getText().strip().lower()
+        if not query:
+            self.search_matches = []
+            self.search_query = ""
+            self.search_root = None
+            self.search_index = -1
+            self.update_search_counter()
+            return
+
+        # A repeat trigger (Enter again, or clicking Next) with the same query
+        # against the same tab just advances to the next match. Anything else
+        # (new text, or switching tabs) re-runs the search from scratch.
+        is_repeat = (query == self.search_query and self.activeRoot is self.search_root)
+
+        if not is_repeat:
+            def node_matches(node):
+                if node.text and query in node.text.lower(): return True
+                try:
+                    if query in node.get_full_url().lower(): return True
+                except Exception:
+                    pass
+                if any(query in m.lower() for m in node.methods): return True
+                if node.note and query in node.note.lower(): return True
+                if any(query in p.lower() for p in node.params): return True
+                return False
+
+            matches = []
+            def walk(node):
+                if node_matches(node): matches.append(node)
+                for child in node.children:
+                    walk(child)
+            walk(self.activeRoot)
+
+            self.search_matches = matches
+            self.search_query = query
+            self.search_root = self.activeRoot
+            self.search_index = -1
+
+        if not self.search_matches:
+            JOptionPane.showMessageDialog(self.mainPanel, u"No request found matching \"{0}\".".format(self.search_field.getText().strip()))
+            self.update_search_counter()
+            return
+
+        self.search_index = (self.search_index + 1) % len(self.search_matches)
+        self.update_search_counter()
+        self.jump_to_match(self.search_matches[self.search_index])
+
+    def update_search_counter(self):
+        if not hasattr(self, 'search_count_label'): return
+        if not self.search_matches:
+            self.search_count_label.setText("")
+        else:
+            self.search_count_label.setText(u"{0}/{1}".format(self.search_index + 1, len(self.search_matches)))
+
+    def jump_to_match(self, match):
+        # Expand any collapsed ancestors so the match actually gets laid out
+        # and rendered rather than being hidden inside a folded branch.
+        ancestor = match.parent
+        while ancestor is not None:
+            ancestor.collapsed = False
+            ancestor = ancestor.parent
+
+        self.selected_nodes = {match}
+        self.selected_method = None
+
+        mode = getattr(self, 'current_view_mode', 'map')
+        if mode == 'grid':
+            self.select_node_in_grid(match)
+        elif mode == 'features':
+            JOptionPane.showMessageDialog(self.mainPanel,
+                u"Found \"{0}\", but search doesn't cover Features view yet "
+                u"(features aren't tied to a single map node) - switch to "
+                u"Visual Map or Grid View to jump to it.".format(match.text))
+        else:
+            self.auto_arrange(None)
+            self.update_toolbar()
+            self.scroll_to_node(match)
+
+    def select_node_in_grid(self, node):
+        if not hasattr(self, 'gridTable'): return
+        self.populate_grid()
+        row = None
+        method = None
+        for i, entry in enumerate(self.table_model.row_data_map):
+            if entry[0] is node:
+                row, method = i, entry[1]
+                break
+        if row is None:
+            self.update_toolbar()
+            return
+        self.selected_method = method
+        self.gridTable.setRowSelectionInterval(row, row)
+        rect = self.gridTable.getCellRect(row, 0, True)
+        SwingUtilities.invokeLater(lambda: self.gridTable.scrollRectToVisible(rect))
+        self.update_toolbar()
+
+    def scroll_to_node(self, node):
+        if not hasattr(self, 'map_label'): return
+        z = self.zoom_factor
+        pad = 80
+        x = int(node.x * z) - pad
+        y = int(node.y * z) - pad
+        w = int(node.width * z) + pad * 2
+        h = int(node.height * z) + pad * 2
+        rect = Rectangle(max(0, x), max(0, y), w, h)
+        try:
+            SwingUtilities.invokeLater(lambda: self.map_label.scrollRectToVisible(rect))
+        except Exception:
+            pass
 
     def createMenuItems(self, invocation):
         menu_list = ArrayList()
@@ -3455,6 +3572,7 @@ class UIBuilder(Runnable):
         btn_grid = JToggleButton("Grid View")
         btn_features = JToggleButton("Features View")
         btn_map.setSelected(True)
+        self.extender.btn_map = btn_map
 
         for b in [btn_map, btn_grid, btn_features]:
             style_btn(b)
@@ -3520,6 +3638,39 @@ class UIBuilder(Runnable):
 
         topBar.add(self.extender.grid_controls_panel)
 
+        # Always-visible (not tied to Grid View, unlike grid_controls_panel above)
+        # so you can jump to a request from the map itself, not just filter rows.
+        search_panel = JPanel(FlowLayout(FlowLayout.LEFT, 5, 0))
+        search_panel.setOpaque(False)
+        search_lbl = JLabel("Find:")
+        search_lbl.setForeground(Color.LIGHT_GRAY)
+        search_panel.add(search_lbl)
+        self.extender.search_field = style_textfield(JTextField("", 16), BURP_ORANGE)
+        self.extender.search_field.addActionListener(lambda e: self.extender.perform_search(e))
+        search_panel.add(self.extender.search_field)
+
+        self.extender.search_count_label = JLabel("")
+        self.extender.search_count_label.setForeground(Color.LIGHT_GRAY)
+        self.extender.search_count_label.setFont(Font("SansSerif", Font.PLAIN, 11))
+        self.extender.search_count_label.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR))
+        self.extender.search_count_label.setToolTipText("Click to jump to the next match")
+        self.extender.search_count_label.addMouseListener(type("SearchCounterClick", (MouseAdapter,), {
+            "mouseClicked": lambda s, e: self.extender.perform_search(e)
+        })())
+        search_panel.add(self.extender.search_count_label)
+
+        # Clicking the counter (or pressing Enter again) both just re-trigger
+        # perform_search, which advances to the next match when the query
+        # hasn't changed - so the stale count (from the previous search)
+        # needs clearing as soon as the text does change.
+        def on_search_typed(e):
+            current = self.extender.search_field.getText().strip().lower()
+            if current != self.extender.search_query:
+                self.extender.search_count_label.setText("")
+        self.extender.search_field.addKeyListener(type("SearchTypedListener", (KeyAdapter,), {"keyReleased": lambda s, e: on_search_typed(e)})())
+
+        topBar.add(search_panel)
+
         self.extender.toolsBtn = JButton(u"Tools")
         style_btn(self.extender.toolsBtn)
         def toggle_sidebar(e):
@@ -3571,6 +3722,10 @@ class UIBuilder(Runnable):
 
                 is_grid = (mode == "grid")
                 self.extender.grid_controls_panel.setVisible(is_grid)
+
+                # Search only covers Map and Grid - hide it in Features view
+                # rather than showing a control that can't do anything there.
+                search_panel.setVisible(mode != "features")
 
                 if mode == "features":
                     self.extender.mainPanel.remove(self.extender.tabbed_pane)
