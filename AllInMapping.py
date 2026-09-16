@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-from burp import IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExtensionStateListener
+from burp import IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExtensionStateListener, IMessageEditorController, IHttpService
 from javax.swing import JPanel, JLabel, JTextArea, JTextField, JButton, JToggleButton, JScrollPane, JOptionPane, BorderFactory, UIManager, SwingUtilities, ImageIcon, JPopupMenu, JMenuItem, AbstractAction, KeyStroke, JComponent, JFileChooser, JCheckBox, JMenu, BoxLayout, Box, JSplitPane, JTable, JTabbedPane, ButtonGroup, ListSelectionModel, JComboBox, DefaultCellEditor, JDialog
 from javax.swing.table import DefaultTableModel, DefaultTableCellRenderer, TableCellRenderer
 from java.awt import BorderLayout, FlowLayout, GridLayout, Color, BasicStroke, RenderingHints, Cursor, Toolkit, Font, Polygon, Dimension, CardLayout, Insets, Rectangle, Component
@@ -14,6 +14,10 @@ import uuid
 import time
 import threading
 from java.util import ArrayList
+
+# Bumped manually on every edit - printed on load so a reload can be
+# confirmed from Burp's Output tab (see registerExtenderCallbacks).
+EXTENSION_BUILD_STAMP = "2026-09-16-07-controller"
 
 BURP_ORANGE = Color(229, 106, 37)
 
@@ -87,7 +91,12 @@ class PrivilegeBoolRenderer(JCheckBox, TableCellRenderer):
             self.setBackground(table.getSelectionBackground() if isSelected else table.getBackground())
         return self
 
-class RestoredHttpService:
+class RestoredHttpService(IHttpService):
+    # Explicitly implements IHttpService (rather than just duck-typing it)
+    # because instances of this class can be returned from
+    # IMessageEditorController.getHttpService(), whose declared Java return
+    # type is IHttpService - an object that only duck-types the same method
+    # names is not guaranteed to satisfy that at the Java call boundary.
     def __init__(self, host, port, protocol):
         self.host = host
         self.port = port
@@ -104,6 +113,21 @@ class RestoredReqRes:
     def getRequest(self): return self.req
     def getResponse(self): return self.res
     def getHttpService(self): return self.svc
+
+class SimpleMessageEditorController(IMessageEditorController):
+    # A standalone IMessageEditor created with controller=None has been
+    # observed failing to render certain responses in Burp's own editor
+    # component (confirmed correct, unmodified bytes; Burp's native Proxy
+    # History viewer displays the same bytes fine, so it's specific to
+    # editors created without a controller). Burp's docs call for a real
+    # controller rather than None - this is the minimal implementation.
+    def __init__(self, http_service, request_bytes, response_bytes):
+        self.http_service = http_service
+        self.request_bytes = request_bytes
+        self.response_bytes = response_bytes
+    def getHttpService(self): return self.http_service
+    def getRequest(self): return self.request_bytes
+    def getResponse(self): return self.response_bytes
 
 class MindMapNode:
     def __init__(self, text, parent=None):
@@ -686,8 +710,7 @@ class MapMouseHandler(MouseAdapter):
                 else:
                     self.extender.selected_nodes.add(node)
             else:
-                if node not in self.extender.selected_nodes:
-                    self.extender.selected_nodes = {node}
+                self.extender.selected_nodes = {node}
         else:
             clicked_rel = None
             stroke = BasicStroke(8.0 / self.extender.zoom_factor) 
@@ -711,7 +734,7 @@ class MapMouseHandler(MouseAdapter):
                 self.extender.map_label.setCursor(Cursor.getPredefinedCursor(Cursor.MOVE_CURSOR))
 
         self.extender.update_toolbar()
-        self.extender.render_map() 
+        self.extender.render_map()
 
     def mouseDragged(self, e):
         if getattr(self.extender, 'is_relating', False): return
@@ -798,6 +821,14 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
         self.helpers = callbacks.getHelpers()
         callbacks.setExtensionName("Interactive Attack Surface MindMap")
 
+        # Version stamp - printed on load so it's possible to confirm from
+        # the Output tab that a reload actually picked up the latest edits
+        # rather than silently continuing to run a previously-loaded copy.
+        # __file__ isn't available in Burp's Jython execution context, so
+        # this is a manually-bumped constant (see EXTENSION_BUILD_STAMP
+        # near the top of the file) rather than a file hash.
+        callbacks.printOutput(u"AllInMapping: build {0}".format(EXTENSION_BUILD_STAMP))
+
         self.copied_burp_request = None
         self.target_roots = {} 
         self.activeRoot = None
@@ -842,7 +873,7 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
 
         self.autosave_interval_sec = 300
         self.save_on_exit = True
-        self.auto_load_on_start = True
+        self.auto_load_on_start = False
         self.last_saved_at = None
 
         self.callbacks.registerHttpListener(self)
@@ -1804,7 +1835,19 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
 
         if toolFlag not in [self.callbacks.TOOL_PROXY, self.callbacks.TOOL_REPEATER]: return
         if not hasattr(self, 'live_sync_cb') or not self.live_sync_cb.isSelected(): return
-        SwingUtilities.invokeLater(lambda: self.process_live_request(messageInfo, toolFlag))
+
+        # Snapshot right here, synchronously, on Burp's own calling thread -
+        # not inside the deferred lambda below. messageInfo can be a live,
+        # mutable object (e.g. a reused Proxy connection buffer or a
+        # Repeater tab); if several messages arrive in a burst (a page load
+        # pulling in many static assets at once) the invokeLater queue can
+        # back up, and by the time a queued call actually runs, Burp may
+        # have already repurposed this same object for a later message -
+        # pairing this node with someone else's response. Snapshotting now,
+        # while messageInfo is still guaranteed to be this exact message,
+        # avoids that race entirely.
+        saved_req_res = self.callbacks.saveBuffersToTempFiles(messageInfo)
+        SwingUtilities.invokeLater(lambda: self.process_live_request(saved_req_res, toolFlag))
 
     def process_live_request(self, reqRes, toolFlag, bypass_live_sync_check=False):
         # Snapshot reqRes to temp files immediately, before touching it any
@@ -1824,8 +1867,17 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
         info = self.helpers.analyzeRequest(saved_req_res)
         if not info or not info.getUrl(): return
 
-        response = saved_req_res.getResponse()
+        # saveBuffersToTempFiles() can occasionally hand back a persisted
+        # snapshot whose response hasn't actually finished being written to
+        # its backing temp file yet - getResponse() then comes back empty
+        # even though reqRes (the object just snapshotted from) already has
+        # it. This shows up mostly under load_scope_and_history(), which
+        # snapshots a whole batch of history entries back to back. Fall
+        # back to reading straight off the original object before giving up.
+        response = saved_req_res.getResponse() or reqRes.getResponse()
         if not response or len(response) == 0: return
+        if not request_bytes:
+            request_bytes = reqRes.getRequest()
 
         resp_info = self.helpers.analyzeResponse(response)
         status_code = resp_info.getStatusCode()
@@ -1910,8 +1962,15 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
         current_node.params.update(params)
         if len(current_node.params) > before_p: is_new_data = True
 
-        current_node.method_requests[method] = saved_req_res
-        current_node.linked_request = saved_req_res
+        # Store a plain, immutable wrapper around the bytes already
+        # validated above rather than saved_req_res itself - this node may
+        # not get clicked (and its getRequest()/getResponse() actually
+        # called) until long after this function returns, and it should
+        # never be possible for that later read to come back different
+        # from what was just validated here.
+        stable_req_res = RestoredReqRes(request_bytes, response, saved_req_res.getHttpService() or reqRes.getHttpService())
+        current_node.method_requests[method] = stable_req_res
+        current_node.linked_request = stable_req_res
 
         if toolFlag == self.callbacks.TOOL_REPEATER:
             if current_node.status != "Tested":
@@ -2146,22 +2205,26 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
         if hasattr(self, 'request_panel'):
             req_out = None
             res_out = None
+            source_svc = None
 
             if len(self.selected_nodes) > 0 and getattr(self, 'current_view_mode', 'map') != 'features':
                 node = list(self.selected_nodes)[0]
 
                 req_bytes = None
                 res_bytes = None
+                source_svc = None
 
                 if hasattr(self, 'selected_method') and self.selected_method:
                     target_req = node.method_requests.get(self.selected_method)
                     if target_req:
                         req_bytes = target_req.getRequest()
                         res_bytes = target_req.getResponse()
+                        source_svc = target_req.getHttpService()
 
                 if not req_bytes and node.linked_request:
                     req_bytes = node.linked_request.getRequest()
                     res_bytes = node.linked_request.getResponse()
+                    source_svc = node.linked_request.getHttpService()
 
                 has_http_data = (len(node.statuses) > 0) or (req_bytes is not None) or (len(node.methods) > 0)
 
@@ -2185,14 +2248,65 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
                     res_out = self.helpers.base64Decode(f_req["res_b64"])
 
             if req_out or res_out:
-                self.request_editor.setMessage(req_out or self.helpers.stringToBytes(""), True)
-                self.response_editor.setMessage(res_out or self.helpers.stringToBytes(""), False)
+                final_req = req_out or self.helpers.stringToBytes("")
+                final_res = res_out or self.helpers.stringToBytes("")
+
+                # setMessage() on the existing, long-lived editor instances
+                # has proven unreliable here - confirmed (via logging) to be
+                # called with the correct, freshly-resolved bytes every time,
+                # yet the display sometimes keeps showing an earlier node's
+                # content regardless of any delay before the call. That
+                # points to internal state inside Burp's IMessageEditor
+                # component itself (most likely a scroll position or a
+                # cached render) that setMessage() doesn't fully reset.
+                # Rather than fight that further, replace the editor
+                # components outright on every update - a brand new
+                # IMessageEditor cannot have leftover state from anything.
+                #
+                # Also supply a real IMessageEditorController instead of
+                # None - a response that Burp's own Proxy History viewer
+                # renders correctly was confirmed to display blank in a
+                # controller-less standalone editor, so some of Burp's
+                # internal rendering appears to depend on that context
+                # being available.
+                controller = SimpleMessageEditorController(source_svc, final_req, final_res)
+
+                new_request_editor = self.callbacks.createMessageEditor(controller, False)
+                new_request_editor.setMessage(final_req, True)
+                self.req_panel.removeAll()
+                self.req_panel.add(new_request_editor.getComponent(), BorderLayout.CENTER)
+                self.request_editor = new_request_editor
+
+                new_response_editor = self.callbacks.createMessageEditor(controller, False)
+                new_response_editor.setMessage(final_res, False)
+                self.res_panel.removeAll()
+                self.res_panel.add(new_response_editor.getComponent(), BorderLayout.CENTER)
+                self.response_editor = new_response_editor
+
+                self.req_panel.revalidate()
+                self.req_panel.repaint()
+                self.res_panel.revalidate()
+                self.res_panel.repaint()
+
                 if not self.request_panel.isVisible():
                     self.request_panel.setVisible(True)
                     if hasattr(self, 'outer_split_pane') and hasattr(self, 'mainPanel'):
                         self.outer_split_pane.setDividerLocation(int(self.mainPanel.getHeight() * 0.40))
                         SwingUtilities.invokeLater(lambda: self.traffic_split.setDividerLocation(0.5))
             else:
+                # Nothing to show for the current selection (no node
+                # selected, or the selected node has no captured
+                # request/response at all) - explicitly clear both editors
+                # rather than relying solely on hiding the panel. If
+                # visibility doesn't actually change for some reason, or
+                # the panel gets shown again before this runs, a stale
+                # previous node's response must never be left on screen to
+                # fool the user into thinking it belongs to the current
+                # selection. The panel itself stays hidden, matching prior
+                # behavior - it should not pop open for a node with nothing
+                # to show.
+                self.request_editor.setMessage(self.helpers.stringToBytes(""), True)
+                self.response_editor.setMessage(self.helpers.stringToBytes(""), False)
                 self.request_panel.setVisible(False)
 
         self.mainPanel.revalidate()
@@ -2823,12 +2937,25 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
     def load_scope_and_history(self):
         all_requests = list(self.callbacks.getProxyHistory()) + list(self.callbacks.getSiteMap(None))
         for reqRes in all_requests:
-            if not reqRes.getResponse(): continue
-            info = self.helpers.analyzeRequest(reqRes)
-            if not info: continue
-            url_obj = info.getUrl()
-            if self.callbacks.isInScope(url_obj):
-                self.process_live_request(reqRes, self.callbacks.TOOL_PROXY, bypass_live_sync_check=True)
+            try:
+                if not reqRes.getResponse(): continue
+                info = self.helpers.analyzeRequest(reqRes)
+                if not info: continue
+                url_obj = info.getUrl()
+                if self.callbacks.isInScope(url_obj):
+                    self.process_live_request(reqRes, self.callbacks.TOOL_PROXY, bypass_live_sync_check=True)
+            except Exception as e:
+                # One malformed/unusual entry must not silently abort every
+                # remaining request in the batch - without this, a single
+                # exception here would stop the for-loop entirely, leaving
+                # every request after the failing one (alphabetically or by
+                # history order, e.g. robots.txt sorting before other
+                # assets) never processed for this run.
+                try:
+                    bad_url = unicode(self.helpers.analyzeRequest(reqRes).getUrl())
+                except Exception:
+                    bad_url = "<unknown URL>"
+                self.callbacks.printError(u"load_scope_and_history: failed on {0}: {1}".format(bad_url, e))
 
     def rebuild_map_from_history(self):
         self.target_roots = {}
@@ -4354,11 +4481,13 @@ class UIBuilder(Runnable):
         req_panel = JPanel(BorderLayout())
         req_panel.setBorder(BorderFactory.createTitledBorder("Request"))
         req_panel.add(self.extender.request_editor.getComponent(), BorderLayout.CENTER)
+        self.extender.req_panel = req_panel
 
         self.extender.response_editor = self.extender.callbacks.createMessageEditor(None, False)
         res_panel = JPanel(BorderLayout())
         res_panel.setBorder(BorderFactory.createTitledBorder("Response"))
         res_panel.add(self.extender.response_editor.getComponent(), BorderLayout.CENTER)
+        self.extender.res_panel = res_panel
 
         self.extender.traffic_split = JSplitPane(JSplitPane.HORIZONTAL_SPLIT, req_panel, res_panel)
         self.extender.traffic_split.setResizeWeight(0.5)
