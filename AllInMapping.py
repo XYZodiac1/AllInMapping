@@ -442,9 +442,10 @@ class GridMouseHandler(MouseAdapter):
             if SwingUtilities.isLeftMouseButton(e):
                 if not self.extender.gridTable.isRowSelected(row):
                     self.extender.gridTable.setRowSelectionInterval(row, row)
-                self.extender.selected_nodes = {self.extender.table_model.row_data_map[row][0]}
-                self.extender.selected_method = self.extender.table_model.row_data_map[row][1]
-                self.extender.update_toolbar()
+            model_row = self.extender.gridTable.convertRowIndexToModel(row)
+            self.extender.selected_nodes = {self.extender.table_model.row_data_map[model_row][0]}
+            self.extender.selected_method = self.extender.table_model.row_data_map[model_row][1]
+            self.extender.update_toolbar()
 
     def check_popup(self, e):
         if e.isPopupTrigger() or SwingUtilities.isRightMouseButton(e):
@@ -454,17 +455,19 @@ class GridMouseHandler(MouseAdapter):
                     self.extender.gridTable.setRowSelectionInterval(row, row)
                 
                 selected_rows = self.extender.gridTable.getSelectedRows()
-                nodes = [self.extender.table_model.row_data_map[r][0] for r in selected_rows]
+                nodes = [self.extender.table_model.row_data_map[self.extender.gridTable.convertRowIndexToModel(r)][0] for r in selected_rows]
                 self.extender.selected_nodes = set(nodes)
                 
                 if len(selected_rows) == 1:
-                    self.extender.selected_method = self.extender.table_model.row_data_map[selected_rows[0]][1]
+                    model_row = self.extender.gridTable.convertRowIndexToModel(selected_rows[0])
+                    self.extender.selected_method = self.extender.table_model.row_data_map[model_row][1]
                 else:
                     self.extender.selected_method = None
                     
                 self.extender.update_toolbar()
                 
-                node = self.extender.table_model.row_data_map[row][0]
+                model_row = self.extender.gridTable.convertRowIndexToModel(row)
+                node = self.extender.table_model.row_data_map[model_row][0]
                 self.extender.show_context_menu(e.getComponent(), e.getX(), e.getY(), node)
 
 class FeatureMasterMouseHandler(MouseAdapter):
@@ -485,13 +488,14 @@ class FeatureMasterMouseHandler(MouseAdapter):
                 if not self.extender.features_master_table.isRowSelected(row):
                     self.extender.features_master_table.setRowSelectionInterval(row, row)
                 
-                self.extender.features_reqs_model.current_feature = self.extender.visible_features[row]
+                model_row = self.extender.features_master_table.convertRowIndexToModel(row)
+                self.extender.features_reqs_model.current_feature = self.extender.visible_features[model_row]
                 self.extender.update_features_detail_table()
                 self.extender.selected_feature_req = None
                 self.extender.update_toolbar()
 
                 if e.getClickCount() == 1:
-                    feat = self.extender.visible_features[row]
+                    feat = self.extender.visible_features[model_row]
                     self.extender.editing_feature = feat
                     self.extender.feature_note_area.setText(feat.get("notes", ""))
                     self.extender.feature_note_scroll.setVisible(True)
@@ -503,12 +507,13 @@ class FeatureMasterMouseHandler(MouseAdapter):
             if row >= 0:
                 if not self.extender.features_master_table.isRowSelected(row):
                     self.extender.features_master_table.setRowSelectionInterval(row, row)
+                model_row = self.extender.features_master_table.convertRowIndexToModel(row)
                 menu = JPopupMenu()
                 p_menu = JMenu("Set Feature Privilege")
                 for p_level in ["Clear", "No Auth", "Low Privs", "High Privs"]:
                     item = JMenuItem(p_level)
                     val = "" if p_level == "Clear" else p_level
-                    def set_fp(evt, v=val, r=row):
+                    def set_fp(evt, v=val, r=model_row):
                         feat = self.extender.visible_features[r]
                         feat["privilege"] = v
                         self.extender.save_state()
@@ -519,7 +524,67 @@ class FeatureMasterMouseHandler(MouseAdapter):
                 
                 menu.addSeparator()
                 rep_item = JMenuItem("Send Feature to Repeater")
-                rep_item.addActionListener(lambda evt, r=row: self.extender.send_feature_to_repeater(self.extender.visible_features[r]))
+                rep_item.addActionListener(lambda evt, r=model_row: self.extender.send_feature_to_repeater(self.extender.visible_features[r]))
+                menu.add(rep_item)
+                
+                menu.show(e.getComponent(), e.getX(), e.getY())
+
+class FeatureReqsMouseHandler(MouseAdapter):
+    def __init__(self, extender): self.extender = extender
+    def mousePressed(self, e): self.check_popup(e)
+    def mouseReleased(self, e): self.check_popup(e)
+    def mouseClicked(self, e):
+        row = self.extender.features_reqs_table.rowAtPoint(e.getPoint())
+        if row == -1: 
+            self.extender.features_reqs_table.clearSelection()
+            self.extender.selected_feature_req = None
+            self.extender.update_toolbar()
+        else:
+            if SwingUtilities.isLeftMouseButton(e):
+                if not self.extender.features_reqs_table.isRowSelected(row):
+                    self.extender.features_reqs_table.setRowSelectionInterval(row, row)
+                model_row = self.extender.features_reqs_table.convertRowIndexToModel(row)
+                if self.extender.features_reqs_model.current_feature:
+                    self.extender.selected_feature_req = self.extender.features_reqs_model.current_feature["requests"][model_row]
+                else:
+                    self.extender.selected_feature_req = self.extender.recorded_reqs[model_row]
+                self.extender.update_toolbar()
+        self.extender.close_feature_note()
+
+    def check_popup(self, e):
+        if e.isPopupTrigger() or SwingUtilities.isRightMouseButton(e):
+            row = self.extender.features_reqs_table.rowAtPoint(e.getPoint())
+            if row >= 0:
+                if not self.extender.features_reqs_table.isRowSelected(row):
+                    self.extender.features_reqs_table.setRowSelectionInterval(row, row)
+                model_row = self.extender.features_reqs_table.convertRowIndexToModel(row)
+                menu = JPopupMenu()
+                p_menu = JMenu("Set Request Privilege")
+                for p_level in ["Clear", "No Auth", "Low Privs", "High Privs"]:
+                    item = JMenuItem(p_level)
+                    val = "" if p_level == "Clear" else p_level
+                    def set_rp(evt, v=val, r=model_row):
+                        if self.extender.features_reqs_model.current_feature:
+                            req = self.extender.features_reqs_model.current_feature["requests"][r]
+                            req["privilege"] = v
+                            self.extender.save_state()
+                        else:
+                            req = self.extender.recorded_reqs[r]
+                            req["privilege"] = v
+                        self.extender.update_features_detail_table()
+                    item.addActionListener(set_rp)
+                    p_menu.add(item)
+                menu.add(p_menu)
+                
+                menu.addSeparator()
+                rep_item = JMenuItem("Send to Repeater")
+                def send_req(evt, r=model_row):
+                    if self.extender.features_reqs_model.current_feature:
+                        req_data = self.extender.features_reqs_model.current_feature["requests"][r]
+                    else:
+                        req_data = self.extender.recorded_reqs[r]
+                    self.extender.send_feature_req_to_repeater(req_data)
+                rep_item.addActionListener(send_req)
                 menu.add(rep_item)
                 
                 menu.show(e.getComponent(), e.getX(), e.getY())
@@ -1714,9 +1779,14 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
             self.update_toolbar()
             return
         self.selected_method = method
-        self.gridTable.setRowSelectionInterval(row, row)
-        rect = self.gridTable.getCellRect(row, 0, True)
-        SwingUtilities.invokeLater(lambda: self.gridTable.scrollRectToVisible(rect))
+        
+        # Convert the model row back to the sorted view row to highlight it correctly on screen
+        view_row = self.gridTable.convertRowIndexToView(row)
+        if view_row >= 0:
+            self.gridTable.setRowSelectionInterval(view_row, view_row)
+            rect = self.gridTable.getCellRect(view_row, 0, True)
+            SwingUtilities.invokeLater(lambda: self.gridTable.scrollRectToVisible(rect))
+            
         self.update_toolbar()
 
     def scroll_to_node(self, node):
@@ -2811,9 +2881,12 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
         self.table_model.row_data_map = []
         if not self.activeRoot: return
 
-        filter_method = ""
+        filter_methods = []
         if hasattr(self, 'grid_method_filter'):
-            filter_method = self.grid_method_filter.getText().strip().upper()
+            raw_filter = self.grid_method_filter.getText().strip().upper()
+            if raw_filter:
+                # Split by comma, strip whitespace, and ignore empty strings
+                filter_methods = [f.strip() for f in raw_filter.split(',') if f.strip()]
 
         def traverse(node):
             if not self.should_show(node): return
@@ -2827,8 +2900,9 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
                     
                     for m in methods_to_display:
                         match = True
-                        if filter_method:
-                            if filter_method not in m:
+                        if filter_methods:
+                            # Match if ANY of the filter strings are in the method name
+                            if not any(f in m for f in filter_methods):
                                 match = False
                         
                         if match:
@@ -3927,7 +4001,7 @@ class UIBuilder(Runnable):
             self.extender.sidebarScroll.setVisible(is_vis)
             if is_vis and hasattr(self.extender, 'split_pane'): 
                 w = self.extender.split_pane.getWidth()
-                target_loc = w - 260 if w > 300 else int(w * 0.7)
+                target_loc = w - 330 if w > 300 else int(w * 0.7)
                 self.extender.split_pane.setDividerLocation(target_loc)
             self.extender.mainPanel.revalidate()
         self.extender.toolsBtn.addActionListener(toggle_sidebar)
@@ -3968,6 +4042,10 @@ class UIBuilder(Runnable):
                 self.extender.toolsBtn.setVisible(is_map)
                 self.extender.toggleLayoutBtn.setVisible(is_map)
                 self.extender.relateBtn.setVisible(is_map)
+                
+                # Force the sidebar to close if switching to Grid or Features view
+                if not is_map and hasattr(self.extender, 'sidebarScroll'):
+                    self.extender.sidebarScroll.setVisible(False)
 
                 is_grid = (mode == "grid")
                 self.extender.grid_controls_panel.setVisible(is_grid)
@@ -4013,7 +4091,14 @@ class UIBuilder(Runnable):
         topBarWrapper = JPanel(BorderLayout())
         topBarWrapper.setBorder(BorderFactory.createMatteBorder(0, 0, 1, 0, Color.DARK_GRAY))
         topBar.setBorder(None)
-        topBarWrapper.add(topBar, BorderLayout.CENTER)
+        
+        # Wrap the topBar in a horizontal ScrollPane to make it dynamic and prevent squishing
+        topBarScroll = JScrollPane(topBar)
+        topBarScroll.setBorder(BorderFactory.createEmptyBorder())
+        topBarScroll.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_NEVER)
+        topBarScroll.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_AS_NEEDED)
+        
+        topBarWrapper.add(topBarScroll, BorderLayout.CENTER)
         topBarWrapper.add(rightBar, BorderLayout.EAST)
 
         self.extender.mainPanel.add(topBarWrapper, BorderLayout.NORTH)
@@ -4030,8 +4115,10 @@ class UIBuilder(Runnable):
         self.extender.sidebarScroll.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_NEVER)
         self.extender.sidebarScroll.setBorder(BorderFactory.createEmptyBorder())
 
-        self.extender.sidebarScroll.setPreferredSize(Dimension(260, 0))
-        self.extender.sidebarScroll.setMinimumSize(Dimension(180, 0))
+        # Use -1 (or omit height constraint) instead of 0 to allow the layout manager 
+        # to calculate the height dynamically without deforming the tools.
+        self.extender.sidebarScroll.setPreferredSize(Dimension(330, -1))
+        self.extender.sidebarScroll.setMinimumSize(Dimension(200, -1))
         self.extender.sidebarScroll.setVisible(False)
 
         def add_sidebar_section(title, comp):
@@ -4161,6 +4248,7 @@ class UIBuilder(Runnable):
         # View 2: Grid View
         self.extender.table_model = MindMapTableModel(self.extender)
         self.extender.gridTable = JTable(self.extender.table_model)
+        self.extender.gridTable.setAutoCreateRowSorter(True)
         self.extender.gridTable.setRowHeight(24)
         self.extender.gridTable.setFillsViewportHeight(True)
         self.extender.gridTable.getTableHeader().setFont(Font("SansSerif", Font.BOLD, 12))
@@ -4278,6 +4366,7 @@ class UIBuilder(Runnable):
         master_panel = JPanel(BorderLayout())
         self.extender.features_master_model = FeaturesMasterTableModel(self.extender)
         self.extender.features_master_table = JTable(self.extender.features_master_model)
+        self.extender.features_master_table.setAutoCreateRowSorter(True)
         self.extender.features_master_table.setSelectionMode(ListSelectionModel.SINGLE_SELECTION)
         self.extender.features_master_table.setFillsViewportHeight(True)
         self.extender.features_master_table.setRowHeight(25)
@@ -4341,6 +4430,7 @@ class UIBuilder(Runnable):
 
         self.extender.features_reqs_model = FeatureReqsTableModel(self.extender)
         self.extender.features_reqs_table = JTable(self.extender.features_reqs_model)
+        self.extender.features_reqs_table.setAutoCreateRowSorter(True)
         self.extender.features_reqs_table.setFillsViewportHeight(True)
         self.extender.features_reqs_table.setRowHeight(25)
 
