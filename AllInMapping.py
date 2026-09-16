@@ -2,7 +2,7 @@
 from burp import IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExtensionStateListener
 from javax.swing import JPanel, JLabel, JTextArea, JTextField, JButton, JToggleButton, JScrollPane, JOptionPane, BorderFactory, UIManager, SwingUtilities, ImageIcon, JPopupMenu, JMenuItem, AbstractAction, KeyStroke, JComponent, JFileChooser, JCheckBox, JMenu, BoxLayout, Box, JSplitPane, JTable, JTabbedPane, ButtonGroup, ListSelectionModel, JComboBox, DefaultCellEditor, JDialog
 from javax.swing.table import DefaultTableModel, DefaultTableCellRenderer, TableCellRenderer
-from java.awt import BorderLayout, FlowLayout, GridLayout, Color, BasicStroke, RenderingHints, Cursor, Toolkit, Font, Polygon, Dimension, CardLayout, Insets, Rectangle
+from java.awt import BorderLayout, FlowLayout, GridLayout, Color, BasicStroke, RenderingHints, Cursor, Toolkit, Font, Polygon, Dimension, CardLayout, Insets, Rectangle, Component
 from java.awt.datatransfer import StringSelection, DataFlavor
 from java.awt.event import MouseAdapter, KeyEvent, KeyAdapter, FocusListener
 from java.awt.geom import Path2D
@@ -838,7 +838,12 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
         self.redo_stack = []
 
         self.live_processed_urls = set()
-        self.unloaded = False 
+        self.unloaded = False
+
+        self.autosave_interval_sec = 300
+        self.save_on_exit = True
+        self.auto_load_on_start = True
+        self.last_saved_at = None
 
         self.callbacks.registerHttpListener(self)
         self.callbacks.registerContextMenuFactory(self)
@@ -846,15 +851,22 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
         SwingUtilities.invokeLater(UIBuilder(self))
 
         def auto_save_loop():
+            elapsed = 0
             while not self.unloaded:
-                for _ in range(300): 
-                    if self.unloaded: break
-                    time.sleep(1)
-                if not self.unloaded and self.activeRoot:
-                    self.save_project_state(silent=True)
+                time.sleep(1)
+                if self.unloaded: break
+                interval = self.autosave_interval_sec
+                if interval <= 0:
+                    elapsed = 0
+                    continue
+                elapsed += 1
+                if elapsed >= interval:
+                    elapsed = 0
+                    if self.activeRoot:
+                        self.save_project_state(silent=True)
 
         t = threading.Thread(target=auto_save_loop)
-        t.daemon = True 
+        t.daemon = True
         t.start()
         
     def apply_grid_renderer(self):
@@ -871,7 +883,8 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
 
     def extensionUnloaded(self):
         self.unloaded = True
-        self.save_project_state(silent=True)
+        if self.save_on_exit:
+            self.save_project_state(silent=True)
 
     def trigger_inline_edit(self, node):
         self.editing_node = node
@@ -1345,12 +1358,19 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
             state_dict = self.get_full_state()
             json_string = json.dumps(state_dict)
             self.callbacks.saveExtensionSetting("MindMapProjectState", json_string)
+            self.last_saved_at = time.strftime("%H:%M:%S", time.localtime())
+            self.update_last_saved_label()
             if not silent and event:
                 JOptionPane.showMessageDialog(self.mainPanel, "Workspace saved to the Burp Project successfully!")
         except Exception as e:
             self.callbacks.printError("Failed to save state: " + str(e))
             if not silent and event:
                 JOptionPane.showMessageDialog(self.mainPanel, "Failed to save: " + str(e))
+
+    def update_last_saved_label(self):
+        if not hasattr(self, 'last_saved_label'): return
+        text = "Last saved: " + self.last_saved_at if self.last_saved_at else "Last saved: never"
+        SwingUtilities.invokeLater(lambda: self.last_saved_label.setText(text))
 
     def load_project_state(self, event=None):
         try:
@@ -1370,6 +1390,78 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
             self.callbacks.printError("Failed to restore Workspace: " + str(e))
             if event:
                 JOptionPane.showMessageDialog(self.mainPanel, "Failed to load Workspace: " + str(e))
+
+    def open_settings_dialog(self, event=None):
+        dialog = JDialog()
+        dialog.setTitle("Settings")
+        dialog.setModal(True)
+        dialog.setSize(380, 260)
+        dialog.setLocationRelativeTo(self.mainPanel)
+
+        content = JPanel(BorderLayout(8, 8))
+        content.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10))
+        dialog.setContentPane(content)
+
+        form = JPanel()
+        form.setLayout(BoxLayout(form, BoxLayout.Y_AXIS))
+
+        def add_row(comp):
+            comp.setAlignmentX(Component.LEFT_ALIGNMENT)
+            form.add(comp)
+
+        def make_hint(text):
+            hint = JLabel(text)
+            hint.setForeground(Color.GRAY)
+            hint.setFont(Font("SansSerif", Font.PLAIN, 10))
+            hint.setBorder(BorderFactory.createEmptyBorder(0, 7, 8, 0))
+            return hint
+
+        row = JPanel(FlowLayout(FlowLayout.LEFT, 5, 2))
+        row.add(JLabel("Autosave interval (seconds):"))
+        interval_field = JTextField(str(self.autosave_interval_sec), 6)
+        row.add(interval_field)
+        add_row(row)
+        add_row(make_hint("0 disables autosave."))
+
+        exit_row = JPanel(FlowLayout(FlowLayout.LEFT, 5, 2))
+        save_on_exit_check = JCheckBox("Save to Project when the extension unloads/Burp exits", self.save_on_exit)
+        exit_row.add(save_on_exit_check)
+        add_row(exit_row)
+
+        load_row = JPanel(FlowLayout(FlowLayout.LEFT, 5, 2))
+        auto_load_check = JCheckBox("Load from Project automatically on startup", self.auto_load_on_start)
+        load_row.add(auto_load_check)
+        add_row(load_row)
+        add_row(make_hint("Recommended: avoids autosave overwriting a saved map you forgot to load."))
+
+        content.add(form, BorderLayout.CENTER)
+
+        btn_row = JPanel(FlowLayout(FlowLayout.RIGHT, 5, 2))
+
+        def do_save(e):
+            raw = interval_field.getText().strip()
+            try:
+                val = int(raw)
+                if val < 0: raise ValueError()
+            except ValueError:
+                JOptionPane.showMessageDialog(dialog, "Enter a whole number of seconds (0 disables autosave).")
+                return
+            self.autosave_interval_sec = val
+            self.save_on_exit = save_on_exit_check.isSelected()
+            self.auto_load_on_start = auto_load_check.isSelected()
+            dialog.dispose()
+
+        save_btn = JButton("Save")
+        save_btn.addActionListener(do_save)
+        btn_row.add(save_btn)
+
+        cancel_btn = JButton("Cancel")
+        cancel_btn.addActionListener(lambda e: dialog.dispose())
+        btn_row.add(cancel_btn)
+
+        content.add(btn_row, BorderLayout.SOUTH)
+
+        dialog.setVisible(True)
 
     def get_hidden_statuses(self):
         if hasattr(self, 'hide_status_field'):
@@ -3501,7 +3593,6 @@ class UIBuilder(Runnable):
         self.extender.mainPanel = JPanel(BorderLayout())
 
         topBar = JPanel(FlowLayout(FlowLayout.LEFT, 10, 10))
-        topBar.setBorder(BorderFactory.createMatteBorder(0, 0, 1, 0, Color.DARK_GRAY))
 
         loadScopeBtn = JButton("Load Scope & History")
         style_btn(loadScopeBtn, bg=BURP_ORANGE)
@@ -3574,6 +3665,12 @@ class UIBuilder(Runnable):
 
         fileBtn.addActionListener(lambda e: file_menu.show(fileBtn, 0, fileBtn.getHeight()))
         topBar.add(fileBtn)
+
+        settingsBtn = JButton(u"⚙")
+        style_btn(settingsBtn, bg=Color(43, 43, 43))
+        settingsBtn.setToolTipText("Settings (autosave interval)")
+        settingsBtn.addActionListener(lambda e: self.extender.open_settings_dialog(e))
+        topBar.add(settingsBtn)
 
         customMapBtn = JButton(u"Custom Mapping")
         style_btn(customMapBtn)
@@ -3779,7 +3876,20 @@ class UIBuilder(Runnable):
         btn_grid.addActionListener(lambda e: switch_view("grid"))
         btn_features.addActionListener(lambda e: switch_view("features"))
 
-        self.extender.mainPanel.add(topBar, BorderLayout.NORTH)
+        self.extender.last_saved_label = JLabel("Last saved: never")
+        self.extender.last_saved_label.setForeground(Color.GRAY)
+        self.extender.last_saved_label.setFont(Font("SansSerif", Font.PLAIN, 10))
+
+        rightBar = JPanel(FlowLayout(FlowLayout.RIGHT, 10, 10))
+        rightBar.add(self.extender.last_saved_label)
+
+        topBarWrapper = JPanel(BorderLayout())
+        topBarWrapper.setBorder(BorderFactory.createMatteBorder(0, 0, 1, 0, Color.DARK_GRAY))
+        topBar.setBorder(None)
+        topBarWrapper.add(topBar, BorderLayout.CENTER)
+        topBarWrapper.add(rightBar, BorderLayout.EAST)
+
+        self.extender.mainPanel.add(topBarWrapper, BorderLayout.NORTH)
 
         self.extender.sidebar = JPanel()
         self.extender.sidebar.setLayout(BoxLayout(self.extender.sidebar, BoxLayout.Y_AXIS))
@@ -4297,5 +4407,8 @@ class UIBuilder(Runnable):
         grid_action_map = self.extender.gridTable.getActionMap()
         grid_input_map.put(KeyStroke.getKeyStroke(KeyEvent.VK_G, ctrl_mask), "send_feature")
         grid_action_map.put("send_feature", send_feature_action)
+
+        if self.extender.auto_load_on_start:
+            self.extender.load_project_state()
 
         self.extender.callbacks.printOutput("AllInMapping Loaded, ready to map!")
