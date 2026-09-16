@@ -3507,7 +3507,8 @@ class UIBuilder(Runnable):
         style_btn(loadScopeBtn, bg=BURP_ORANGE)
         loadScopeBtn.setFont(Font("SansSerif", Font.BOLD, 11))
         def do_load_scope(e):
-            self.extender.rebuild_map_from_history()
+            self.extender.load_scope_and_history()
+            self.extender.auto_arrange(None)
         loadScopeBtn.addActionListener(do_load_scope)
         topBar.add(loadScopeBtn)
 
@@ -3546,6 +3547,30 @@ class UIBuilder(Runnable):
         exportCanvasItem = JMenuItem(u"Export Canvas (Obsidian)")
         exportCanvasItem.addActionListener(lambda e: self.extender.export_canvas(e))
         file_menu.add(exportCanvasItem)
+
+        file_menu.addSeparator()
+
+        clearMapItem = JMenuItem(u"Clear Map")
+        def do_clear_map(e):
+            confirm = JOptionPane.showConfirmDialog(
+                self.extender.mainPanel,
+                "This clears every tab and node from the map (in memory only - "
+                "nothing on disk is touched). Continue?",
+                "Clear Map",
+                JOptionPane.YES_NO_OPTION,
+                JOptionPane.WARNING_MESSAGE
+            )
+            if confirm != JOptionPane.YES_OPTION: return
+            self.extender.save_state()
+            self.extender.target_roots = {}
+            self.extender.tabbed_pane.removeAll()
+            self.extender.activeRoot = None
+            self.extender.selected_nodes = set()
+            self.extender.live_processed_urls = set()
+            self.extender.tabbed_pane.revalidate()
+            self.extender.tabbed_pane.repaint()
+        clearMapItem.addActionListener(do_clear_map)
+        file_menu.add(clearMapItem)
 
         fileBtn.addActionListener(lambda e: file_menu.show(fileBtn, 0, fileBtn.getHeight()))
         topBar.add(fileBtn)
