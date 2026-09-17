@@ -1987,22 +1987,10 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
         is_new_data = False
 
         # Helper to identify if a segment is an ID (numeric or UUID)
-        def is_id_segment(segment):
-            if segment.isdigit(): 
-                return True
-            # Basic UUID pattern check (36 chars, 4 dashes)
-            if len(segment) == 36 and segment.count('-') == 4: 
-                return True
-            return False
-
         if path and path != "/":
             parts = path.split("/")
             for part in parts:
                 if not part: continue
-                
-                # Collapse dynamic ID segments into a single representative node
-                if is_id_segment(part):
-                    part = "{id}"
                     
                 next_node = current_node.find_child(part)
                 if next_node is None:
