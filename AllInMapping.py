@@ -1982,12 +1982,34 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
         current_node = targetRoot
         is_new_data = False
 
+        path = url_obj.getPath()
+        current_node = targetRoot
+        is_new_data = False
+
+        # Helper to identify if a segment is an ID (numeric or UUID)
+        def is_id_segment(segment):
+            if segment.isdigit(): 
+                return True
+            # Basic UUID pattern check (36 chars, 4 dashes)
+            if len(segment) == 36 and segment.count('-') == 4: 
+                return True
+            return False
+
         if path and path != "/":
             parts = path.split("/")
             for part in parts:
                 if not part: continue
+                
+                # Collapse dynamic ID segments into a single representative node
+                if is_id_segment(part):
+                    part = "{id}"
+                    
                 next_node = current_node.find_child(part)
                 if next_node is None:
+                    # Prevent forged paths in Repeater from creating new junk nodes
+                    if toolFlag == self.callbacks.TOOL_REPEATER:
+                        return 
+                        
                     next_node = MindMapNode(part, parent=current_node)
                     current_node.children.append(next_node)
                     is_new_data = True
@@ -2885,8 +2907,22 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
         if hasattr(self, 'grid_method_filter'):
             raw_filter = self.grid_method_filter.getText().strip().upper()
             if raw_filter:
-                # Split by comma, strip whitespace, and ignore empty strings
                 filter_methods = [f.strip() for f in raw_filter.split(',') if f.strip()]
+
+        grid_hide_exts = []
+        if hasattr(self, 'grid_ext_filter'):
+            raw_ext = self.grid_ext_filter.getText().strip().lower()
+            if raw_ext:
+                grid_hide_exts = [x.strip() for x in raw_ext.split(',') if x.strip()]
+
+        grid_hide_statuses = set()
+        if hasattr(self, 'grid_status_filter'):
+            raw_st = self.grid_status_filter.getText().strip()
+            if raw_st:
+                try: 
+                    grid_hide_statuses = set([int(x.strip()) for x in raw_st.split(",") if x.strip().isdigit()])
+                except: 
+                    pass
 
         def traverse(node):
             if not self.should_show(node): return
@@ -2894,15 +2930,27 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
             has_http_data = (len(node.statuses) > 0) or (node.linked_request is not None) or (len(node.methods) > 0)
 
             if node != self.activeRoot:
-                if not getattr(node, 'is_manual', False) and has_http_data:
+                show_this_node = True
+                
+                # Exclude based on Extensions
+                if grid_hide_exts and node.text:
+                    if any(node.text.lower().endswith(ext) for ext in grid_hide_exts):
+                        show_this_node = False
+                        
+                # Exclude based on Status Code (if ALL statuses on this node match the excluded list)
+                if show_this_node and grid_hide_statuses and node.statuses:
+                    if all(s in grid_hide_statuses for s in node.statuses):
+                        show_this_node = False
+
+                if show_this_node and not getattr(node, 'is_manual', False) and has_http_data:
                     # If the node has methods, split into multiple rows
                     methods_to_display = sorted(list(node.methods)) if node.methods else ["N/A"]
                     
                     for m in methods_to_display:
                         match = True
                         if filter_methods:
-                            # Match if ANY of the filter strings are in the method name
-                            if not any(f in m for f in filter_methods):
+                            # If ANY of the filtered methods are found in this method, exclude it
+                            if any(f in m for f in filter_methods):
                                 match = False
                         
                         if match:
@@ -3950,14 +3998,46 @@ class UIBuilder(Runnable):
         self.extender.grid_controls_panel.add(delRowBtn)
 
         self.extender.grid_controls_panel.add(Box.createHorizontalStrut(10))
-        filter_lbl = JLabel("Method:")
-        filter_lbl.setForeground(Color.LIGHT_GRAY)
-        self.extender.grid_controls_panel.add(filter_lbl)
-        self.extender.grid_method_filter = style_textfield(JTextField("", 6), BURP_ORANGE)
+        
+        gridFiltersBtn = JButton(u"Filters ⚙") # "Filters ▾"
+        style_btn(gridFiltersBtn)
+        
+        grid_filter_popup = JPopupMenu()
+        grid_filter_panel = JPanel()
+        grid_filter_panel.setLayout(BoxLayout(grid_filter_panel, BoxLayout.Y_AXIS))
+        grid_filter_panel.setBorder(BorderFactory.createEmptyBorder(8, 8, 8, 8))
+        
+        def add_filter_row(label_text, tf):
+            lbl = JLabel(label_text)
+            lbl.setAlignmentX(Component.LEFT_ALIGNMENT)
+            tf.setAlignmentX(Component.LEFT_ALIGNMENT)
+            tf.setMaximumSize(Dimension(300, 28))
+            grid_filter_panel.add(lbl)
+            grid_filter_panel.add(Box.createVerticalStrut(2))
+            grid_filter_panel.add(tf)
+            grid_filter_panel.add(Box.createVerticalStrut(8))
+
+        # Define the fields with default rule settings
+        self.extender.grid_method_filter = style_textfield(JTextField("", 20), BURP_ORANGE)
+        self.extender.grid_ext_filter = style_textfield(JTextField(".js, .json, .css, .map, .ttf, .mp3, .otf, .mp4, .png, .jpg, .jpeg, .gif, .svg, .ico, .woff, .woff2", 20), BURP_ORANGE)
+        self.extender.grid_status_filter = style_textfield(JTextField("400, 403, 404", 20), BURP_ORANGE)
+
         def trigger_grid_filter(e):
             self.extender.populate_grid()
-        self.extender.grid_method_filter.addKeyListener(type("FilterKey", (KeyAdapter,), {"keyReleased": lambda s, e: trigger_grid_filter(e)})())
-        self.extender.grid_controls_panel.add(self.extender.grid_method_filter)
+            
+        fk_listener = type("FilterKey", (KeyAdapter,), {"keyReleased": lambda s, e: trigger_grid_filter(e)})()
+        self.extender.grid_method_filter.addKeyListener(fk_listener)
+        self.extender.grid_ext_filter.addKeyListener(fk_listener)
+        self.extender.grid_status_filter.addKeyListener(fk_listener)
+
+        add_filter_row("Exclude Methods (e.g. OPTIONS, HEAD):", self.extender.grid_method_filter)
+        add_filter_row("Exclude Exts (e.g. .js, .css):", self.extender.grid_ext_filter)
+        add_filter_row("Exclude Statuses (e.g. 404, 400):", self.extender.grid_status_filter)
+
+        grid_filter_popup.add(grid_filter_panel)
+        gridFiltersBtn.addActionListener(lambda e: grid_filter_popup.show(gridFiltersBtn, 0, gridFiltersBtn.getHeight()))
+        
+        self.extender.grid_controls_panel.add(gridFiltersBtn)
 
         topBar.add(self.extender.grid_controls_panel)
 
