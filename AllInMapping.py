@@ -98,12 +98,13 @@ class RestoredHttpService(IHttpService):
     # type is IHttpService - an object that only duck-types the same method
     # names is not guaranteed to satisfy that at the Java call boundary.
     def __init__(self, host, port, protocol):
-        self.host = host
-        self.port = port
-        self.protocol = protocol
-    def getHost(self): return self.host
-    def getPort(self): return self.port
-    def getProtocol(self): return self.protocol
+        self._host = host
+        self._port = port
+        self._protocol = protocol
+        
+    def getHost(self): return self._host
+    def getPort(self): return self._port
+    def getProtocol(self): return self._protocol
 
 class RestoredReqRes:
     def __init__(self, req, res, svc):
@@ -433,6 +434,7 @@ class GridMouseHandler(MouseAdapter):
 
     def mouseClicked(self, e):
         row = self.extender.gridTable.rowAtPoint(e.getPoint())
+        col = self.extender.gridTable.columnAtPoint(e.getPoint())
         if row == -1: 
             self.extender.gridTable.clearSelection()
             self.extender.selected_nodes = set()
@@ -445,11 +447,18 @@ class GridMouseHandler(MouseAdapter):
             model_row = self.extender.gridTable.convertRowIndexToModel(row)
             self.extender.selected_nodes = {self.extender.table_model.row_data_map[model_row][0]}
             self.extender.selected_method = self.extender.table_model.row_data_map[model_row][1]
-            self.extender.update_toolbar()
+            
+            if col >= 0:
+                model_col = self.extender.gridTable.convertColumnIndexToModel(col)
+                if model_col not in (3, 4, 5):
+                    self.extender.update_toolbar()
+            else:
+                self.extender.update_toolbar()
 
     def check_popup(self, e):
         if e.isPopupTrigger() or SwingUtilities.isRightMouseButton(e):
             row = self.extender.gridTable.rowAtPoint(e.getPoint())
+            col = self.extender.gridTable.columnAtPoint(e.getPoint())
             if row >= 0:
                 if not self.extender.gridTable.isRowSelected(row):
                     self.extender.gridTable.setRowSelectionInterval(row, row)
@@ -464,7 +473,12 @@ class GridMouseHandler(MouseAdapter):
                 else:
                     self.extender.selected_method = None
                     
-                self.extender.update_toolbar()
+                if col >= 0:
+                    model_col = self.extender.gridTable.convertColumnIndexToModel(col)
+                    if model_col not in (3, 4, 5):
+                        self.extender.update_toolbar()
+                else:
+                    self.extender.update_toolbar()
                 
                 model_row = self.extender.gridTable.convertRowIndexToModel(row)
                 node = self.extender.table_model.row_data_map[model_row][0]
@@ -4345,6 +4359,12 @@ class UIBuilder(Runnable):
             if rows:
                 nodes = [self.extender.table_model.row_data_map[r][0] for r in rows if r < len(self.extender.table_model.row_data_map)]
                 self.extender.selected_nodes = set(nodes)
+                
+                col = self.extender.gridTable.getColumnModel().getSelectionModel().getLeadSelectionIndex()
+                if col >= 0:
+                    model_col = self.extender.gridTable.convertColumnIndexToModel(col)
+                    if model_col in (3, 4, 5):
+                        return
             else:
                 self.extender.selected_nodes = set()
                 self.extender.selected_method = None
