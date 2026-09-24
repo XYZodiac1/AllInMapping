@@ -17,7 +17,7 @@ from java.util import ArrayList
 
 # Bumped manually on every edit - printed on load so a reload can be
 # confirmed from Burp's Output tab (see registerExtenderCallbacks).
-EXTENSION_BUILD_STAMP = "2026-09-16-07-controller"
+EXTENSION_BUILD_STAMP = "2026-09-21-01-complete"
 
 BURP_ORANGE = Color(229, 106, 37)
 
@@ -74,6 +74,7 @@ class PrivilegeBoolRenderer(JCheckBox, TableCellRenderer):
         self.data_source_callback = data_source_callback
         self.setHorizontalAlignment(JCheckBox.CENTER)
         self.setOpaque(True)
+        self.setBorderPainted(True) # Fix for the missing vertical grid line
         
     def getTableCellRendererComponent(self, table, value, isSelected, hasFocus, row, column):
         if value is not None:
@@ -89,6 +90,15 @@ class PrivilegeBoolRenderer(JCheckBox, TableCellRenderer):
             self.setBackground(bg_color)
         else:
             self.setBackground(table.getSelectionBackground() if isSelected else table.getBackground())
+            
+        # Restore standard JTable cell borders to draw the gridlines
+        if hasFocus:
+            border = UIManager.getBorder("Table.focusCellHighlightBorder")
+        else:
+            border = UIManager.getBorder("Table.cellNoFocusBorder")
+            
+        self.setBorder(border if border else BorderFactory.createEmptyBorder(1, 1, 1, 1))
+        
         return self
 
 class RestoredHttpService(IHttpService):
@@ -101,7 +111,6 @@ class RestoredHttpService(IHttpService):
         self._host = host
         self._port = port
         self._protocol = protocol
-        
     def getHost(self): return self._host
     def getPort(self): return self._port
     def getProtocol(self): return self._protocol
@@ -603,64 +612,6 @@ class FeatureReqsMouseHandler(MouseAdapter):
                 
                 menu.show(e.getComponent(), e.getX(), e.getY())
 
-class FeatureReqsMouseHandler(MouseAdapter):
-    def __init__(self, extender): self.extender = extender
-    def mousePressed(self, e): self.check_popup(e)
-    def mouseReleased(self, e): self.check_popup(e)
-    def mouseClicked(self, e):
-        row = self.extender.features_reqs_table.rowAtPoint(e.getPoint())
-        if row == -1: 
-            self.extender.features_reqs_table.clearSelection()
-            self.extender.selected_feature_req = None
-            self.extender.update_toolbar()
-        else:
-            if SwingUtilities.isLeftMouseButton(e):
-                if not self.extender.features_reqs_table.isRowSelected(row):
-                    self.extender.features_reqs_table.setRowSelectionInterval(row, row)
-                if self.extender.features_reqs_model.current_feature:
-                    self.extender.selected_feature_req = self.extender.features_reqs_model.current_feature["requests"][row]
-                else:
-                    self.extender.selected_feature_req = self.extender.recorded_reqs[row]
-                self.extender.update_toolbar()
-        self.extender.close_feature_note()
-
-    def check_popup(self, e):
-        if e.isPopupTrigger() or SwingUtilities.isRightMouseButton(e):
-            row = self.extender.features_reqs_table.rowAtPoint(e.getPoint())
-            if row >= 0:
-                if not self.extender.features_reqs_table.isRowSelected(row):
-                    self.extender.features_reqs_table.setRowSelectionInterval(row, row)
-                menu = JPopupMenu()
-                p_menu = JMenu("Set Request Privilege")
-                for p_level in ["Clear", "No Auth", "Low Privs", "High Privs"]:
-                    item = JMenuItem(p_level)
-                    val = "" if p_level == "Clear" else p_level
-                    def set_rp(evt, v=val, r=row):
-                        if self.extender.features_reqs_model.current_feature:
-                            req = self.extender.features_reqs_model.current_feature["requests"][r]
-                            req["privilege"] = v
-                            self.extender.save_state()
-                        else:
-                            req = self.extender.recorded_reqs[r]
-                            req["privilege"] = v
-                        self.extender.update_features_detail_table()
-                    item.addActionListener(set_rp)
-                    p_menu.add(item)
-                menu.add(p_menu)
-                
-                menu.addSeparator()
-                rep_item = JMenuItem("Send to Repeater")
-                def send_req(evt, r=row):
-                    if self.extender.features_reqs_model.current_feature:
-                        req_data = self.extender.features_reqs_model.current_feature["requests"][r]
-                    else:
-                        req_data = self.extender.recorded_reqs[r]
-                    self.extender.send_feature_req_to_repeater(req_data)
-                rep_item.addActionListener(send_req)
-                menu.add(rep_item)
-                
-                menu.show(e.getComponent(), e.getX(), e.getY())
-
 class MapMouseHandler(MouseAdapter):
     def __init__(self, extender):
         self.extender = extender
@@ -950,9 +901,14 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
         self.live_processed_urls = set()
         self.unloaded = False
 
-        self.autosave_interval_sec = 300
-        self.save_on_exit = True
-        self.auto_load_on_start = False
+        # Load saved settings if they exist, otherwise use defaults
+        saved_interval = self.callbacks.loadExtensionSetting("MindMap_AutosaveInterval")
+        saved_save_exit = self.callbacks.loadExtensionSetting("MindMap_SaveOnExit")
+        saved_auto_load = self.callbacks.loadExtensionSetting("MindMap_AutoLoad")
+
+        self.autosave_interval_sec = int(saved_interval) if saved_interval is not None else 300
+        self.save_on_exit = (saved_save_exit == "True") if saved_save_exit is not None else True
+        self.auto_load_on_start = (saved_auto_load == "True") if saved_auto_load is not None else False
         self.last_saved_at = None
 
         self.callbacks.registerHttpListener(self)
@@ -990,6 +946,29 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
                 self.gridTable.getColumnModel().getColumn(i).setCellRenderer(bool_renderer)
             else:
                 self.gridTable.getColumnModel().getColumn(i).setCellRenderer(text_renderer)
+
+        # Re-apply column widths and editors so they survive "Load from Project"
+        if self.gridTable.getColumnCount() >= 6:
+            # Method Column (0)
+            self.gridTable.getColumnModel().getColumn(0).setMinWidth(50)
+            self.gridTable.getColumnModel().getColumn(0).setMaxWidth(65)
+            self.gridTable.getColumnModel().getColumn(0).setPreferredWidth(55)
+            
+            # Tested Column (3)
+            self.gridTable.getColumnModel().getColumn(3).setMinWidth(45)
+            self.gridTable.getColumnModel().getColumn(3).setMaxWidth(55)
+            self.gridTable.getColumnModel().getColumn(3).setPreferredWidth(50)
+            
+            # Privilege Column (4)
+            priv_col = self.gridTable.getColumnModel().getColumn(4)
+            priv_col.setMinWidth(75)
+            priv_col.setMaxWidth(90)
+            priv_col.setPreferredWidth(85)
+            priv_col.setCellEditor(create_privilege_editor())
+            
+            # Note Column (5)
+            note_col = self.gridTable.getColumnModel().getColumn(5)
+            note_col.setPreferredWidth(250)
 
     def extensionUnloaded(self):
         self.unloaded = True
@@ -1559,6 +1538,12 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
             self.autosave_interval_sec = val
             self.save_on_exit = save_on_exit_check.isSelected()
             self.auto_load_on_start = auto_load_check.isSelected()
+            
+            # Save settings persistently to Burp
+            self.callbacks.saveExtensionSetting("MindMap_AutosaveInterval", str(self.autosave_interval_sec))
+            self.callbacks.saveExtensionSetting("MindMap_SaveOnExit", str(self.save_on_exit))
+            self.callbacks.saveExtensionSetting("MindMap_AutoLoad", str(self.auto_load_on_start))
+            
             dialog.dispose()
 
         save_btn = JButton("Save")
@@ -1570,6 +1555,9 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
         btn_row.add(cancel_btn)
 
         content.add(btn_row, BorderLayout.SOUTH)
+
+        # Allow pressing 'Enter' anywhere in the dialog to trigger the Save button
+        dialog.getRootPane().setDefaultButton(save_btn)
 
         dialog.setVisible(True)
 
@@ -1631,6 +1619,7 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
 
     def set_theme(self, theme_name):
         self.current_theme = theme_name
+        self.callbacks.saveExtensionSetting("MindMap_Theme", theme_name)
         self.render_map()
 
     def should_show(self, node):
@@ -2967,6 +2956,31 @@ class BurpExtender(IBurpExtender, ITab, IHttpListener, IContextMenuFactory, IExt
                 traverse(child)
 
         traverse(self.activeRoot)
+        self.adjust_url_column_width() # Dynamically locks the URL length + 10
+
+    def adjust_url_column_width(self):
+        if not hasattr(self, 'gridTable') or self.gridTable.getColumnCount() < 2: return
+        
+        table = self.gridTable
+        url_col_idx = 1
+        max_width = 50 # Base minimum
+        
+        try:
+            # Measure the rendered width of text in all rows for the URL column
+            for r in range(table.getRowCount()):
+                renderer = table.getCellRenderer(r, url_col_idx)
+                comp = renderer.getTableCellRendererComponent(table, table.getValueAt(r, url_col_idx), False, False, r, url_col_idx)
+                max_width = max(max_width, comp.getPreferredSize().width)
+                
+            max_width += 10 # Add the requested 10px padding
+            
+            # Lock the column to exactly this calculated size
+            col = table.getColumnModel().getColumn(url_col_idx)
+            col.setMinWidth(max_width)
+            col.setMaxWidth(max_width)
+            col.setPreferredWidth(max_width)
+        except Exception:
+            pass # Failsafe against empty tables or threading artifacts
 
     def on_tab_changed(self):
         idx = self.tabbed_pane.getSelectedIndex()
@@ -4021,7 +4035,7 @@ class UIBuilder(Runnable):
 
         # Define the fields with default rule settings
         self.extender.grid_method_filter = style_textfield(JTextField("", 20), BURP_ORANGE)
-        self.extender.grid_ext_filter = style_textfield(JTextField(".js, .json, .css, .map, .ttf, .mp3, .otf, .mp4, .png, .jpg, .jpeg, .gif, .svg, .ico, .woff, .woff2", 20), BURP_ORANGE)
+        self.extender.grid_ext_filter = style_textfield(JTextField(".js, .json, .css, .map, .ttf, .mp3, .otf, .mp4, .png, .jpg, .jpeg, .gif, .svg, .ico, .woff, .woff2, ttf", 20), BURP_ORANGE)
         self.extender.grid_status_filter = style_textfield(JTextField("400, 403, 404", 20), BURP_ORANGE)
 
         def trigger_grid_filter(e):
@@ -4093,6 +4107,7 @@ class UIBuilder(Runnable):
         style_btn(self.extender.toggleLayoutBtn)
         def toggle_layout(e):
             self.extender.is_vertical_layout = not self.extender.is_vertical_layout
+            self.extender.callbacks.saveExtensionSetting("MindMap_VerticalLayout", str(self.extender.is_vertical_layout))
             self.extender.auto_arrange(None)
         self.extender.toggleLayoutBtn.addActionListener(toggle_layout)
         topBar.add(self.extender.toggleLayoutBtn)
@@ -4335,18 +4350,24 @@ class UIBuilder(Runnable):
         self.extender.gridTable.setFillsViewportHeight(True)
         self.extender.gridTable.getTableHeader().setFont(Font("SansSerif", Font.BOLD, 12))
         
-        self.extender.gridTable.getColumnModel().getColumn(0).setMinWidth(60)
-        self.extender.gridTable.getColumnModel().getColumn(0).setMaxWidth(100)
+        # Method Column (0) - Tight fit for standard HTTP verbs
+        self.extender.gridTable.getColumnModel().getColumn(0).setMinWidth(50)
+        self.extender.gridTable.getColumnModel().getColumn(0).setMaxWidth(65)
+        self.extender.gridTable.getColumnModel().getColumn(0).setPreferredWidth(55)
         
-        self.extender.gridTable.getColumnModel().getColumn(3).setMinWidth(40)
-        self.extender.gridTable.getColumnModel().getColumn(3).setMaxWidth(60)
+        # Tested Column (3) - Just enough for the checkbox
+        self.extender.gridTable.getColumnModel().getColumn(3).setMinWidth(45)
+        self.extender.gridTable.getColumnModel().getColumn(3).setMaxWidth(55)
+        self.extender.gridTable.getColumnModel().getColumn(3).setPreferredWidth(50)
         
+        # Privilege Column (4) - Tight fit for "High Privs" / "No Auth"
         priv_col = self.extender.gridTable.getColumnModel().getColumn(4)
-        priv_col.setMinWidth(90)
-        priv_col.setMaxWidth(130)
-        priv_col.setPreferredWidth(110)
+        priv_col.setMinWidth(75)
+        priv_col.setMaxWidth(90)
+        priv_col.setPreferredWidth(85)
         priv_col.setCellEditor(create_privilege_editor())
         
+        # Note Column (5) - Allow it to expand freely
         note_col = self.extender.gridTable.getColumnModel().getColumn(5)
         note_col.setPreferredWidth(250)
 
@@ -4382,6 +4403,7 @@ class UIBuilder(Runnable):
                     e.consume()
         self.extender.gridTable.addKeyListener(type("GridKeyListener", (KeyAdapter,), {"keyPressed": lambda s, e: grid_key_pressed(e)})())
         self.extender.gridTable.addMouseListener(GridMouseHandler(self.extender))
+        self.extender.gridTable.getSelectionModel().addListSelectionListener(row_selected)
 
         grid_wrapper = JPanel(BorderLayout())
         self.extender.gridScroll = JScrollPane(self.extender.gridTable)
@@ -4405,6 +4427,7 @@ class UIBuilder(Runnable):
                 self.extender.update_features_detail_table()
             else:
                 self.extender.is_recording_feature = False
+                self.extender.recorded_reqs = []
                 recordBtn.setText("Record Feature")
         recordBtn.addActionListener(toggle_record)
         feat_toolbar.add(recordBtn)
