@@ -13,7 +13,7 @@ Before installing, ensure you have the following set up in your Burp Suite envir
 ## 🛠️ Installation
 
 1. Go to the **Extensions** tab in Burp Suite, set the **Extension Type** to **Python**.
-2. Choose your downloaded `AllInMapping.py` file.
+2. Choose your downloaded `AllInMapping.py` file. Keep the `allinmapping/` folder next to it; the extension is loaded from there.
 
 ## 💡 Examples of Use (Workflows)
 
